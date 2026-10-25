@@ -7,7 +7,7 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     plan: free             # no card needed; sleeps after ~15 min idle (first visit then takes ~1 min). Paid: starter/standard
-    healthCheckPath: /
+    healthCheckPath: /favicon.svg   # static file: answers even while R is busy
     autoDeploy: true
     envVars:
       - key: RP_REBUILD
