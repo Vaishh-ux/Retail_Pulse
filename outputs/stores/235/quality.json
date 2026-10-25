@@ -1,0 +1,63 @@
+{
+  "rows_raw": 15714,
+  "columns_missing": [],
+  "missing_by_column": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  "duplicates_removed": 0,
+  "hourly_wrong_length": 0,
+  "negative_sales_rows": 0,
+  "discount_out_of_range": 0,
+  "hourly_daily_mismatch": 0,
+  "stock_count_mismatch": 0,
+  "imputed_precpt": 0,
+  "imputed_avg_temperature": 0,
+  "imputed_avg_humidity": 0,
+  "imputed_avg_wind_level": 0,
+  "products": 162,
+  "date_min": "2024-03-28",
+  "date_max": "2024-07-02",
+  "missing_product_days": 0,
+  "rows_clean": 15714,
+  "zero_sale_share": 0.0191548937253405,
+  "stockout_hour_rate": 0.19228076874125,
+  "share_days_any_stockout": 0.436426116838488,
+  "share_stockout_days": 0.172394043528064,
+  "promo_day_share": 0.495036273386789,
+  "raw_profile": {
+    "rows": 15714,
+    "columns": 19,
+    "rows_by_split": {
+      "eval": 1134,
+      "train": 14580
+    },
+    "products": 162,
+    "date_min": "2024-03-28",
+    "date_max": "2024-07-02",
+    "missing_by_column": {
+      "city_id": 0,
+      "store_id": 0,
+      "management_group_id": 0,
+      "first_category_id": 0,
+      "second_category_id": 0,
+      "third_category_id": 0,
+      "product_id": 0,
+      "dt": 0,
+      "sale_amount": 0,
+      "stock_hour6_22_cnt": 0,
+      "discount": 0,
+      "holiday_flag": 0,
+      "activity_flag": 0,
+      "precpt": 0,
+      "avg_temperature": 0,
+      "avg_humidity": 0,
+      "avg_wind_level": 0
+    },
+    "sale_amount_summary": {
+      "0%": 0,
+      "25%": 0.5,
+      "50%": 0.8,
+      "75%": 1.4,
+      "95%": 3.9,
+      "100%": 25.8
+    }
+  }
+}

@@ -1,0 +1,22 @@
+# Render Blueprint - one Docker web service, no database needed
+# (all results are read-only artifacts produced at build time).
+services:
+  - type: web
+    name: retailpulse
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter          # free also works, but sleeps after inactivity and has 512 MB RAM
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: RP_REBUILD
+        value: "false"     # true = re-run the analysis during the build
+      - key: RP_DATA_MODE
+        value: auto        # auto | real | synthetic
+      - key: RP_STORE_ID
+        value: auto        # or a specific store id from FreshRetailNet-50K
+      - key: RP_STORE_CACHE
+        value: "2"         # stores kept in memory; 1 = lowest memory use
+      - key: RP_ANOMALY_Z
+        value: "3"
