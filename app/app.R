@@ -116,13 +116,65 @@ if (length(STORE_DIRS)) {
   message(sprintf("RetailPulse warm-up done in %.1f s", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
 }
 
+# App-wide cache for shiny::bindCache outputs, kept small for 512 MB instances
+shiny::shinyOptions(cache = cachem::cache_mem(max_size = 40 * 1024^2))
+
+# Shared, per-process cache of analysis results. Anomalies and recommendations depend
+# only on (store, threshold, rule params, growth), not on the visitor, so every session
+# reuses them instead of recomputing (seconds on a 0.1-CPU instance).
+.calc_cache <- new.env(parent = emptyenv())
+memo <- function(key, expr) {
+  if (is.null(.calc_cache[[key]])) {
+    if (length(ls(.calc_cache)) > 80) rm(list = ls(.calc_cache), envir = .calc_cache)
+    .calc_cache[[key]] <- force(expr)
+  }
+  .calc_cache[[key]]
+}
+calc_anoms <- function(RP, zthr) {
+  sid <- as.character(RP$manifest$store_id)
+  memo(paste("an", sid, zthr), rp_classify_anomalies(RP$daily, zthr, stats::quantile(RP$daily$precpt, 0.9, na.rm = TRUE)))
+}
+calc_recs <- function(RP, params = list(), zthr, growth = 1) {
+  sid <- as.character(RP$manifest$store_id)
+  key <- paste("rec", sid, zthr, growth, if (length(params)) paste(deparse(params[order(names(params))]), collapse = "") else "default")
+  memo(key, {
+    an <- calc_anoms(RP, zthr)
+    ind <- rp_product_indicators(RP$daily, RP$forecast_next, RP$manifest$chosen_model, an, RP$risk_next,
+                                 RP$forecast_cv_product, RP$products[, c("product_id", "full_instock_days", "zero_sale_share")],
+                                 growth = growth)
+    rp_recommend(ind, params, risk_threshold = RP$manifest$risk_threshold)
+  })
+}
+# Precompute a store's default results and draw each chart type once (the first plotly
+# build in a process is ~30x slower than later ones).
+warm_store <- function(RP) {
+  z <- RP$manifest$thresholds$anomaly_z
+  invisible(calc_recs(RP, list(), z))
+  d <- RP$daily; last <- max(d$dt); x <- d[d$dt > last - 28, ]
+  pid <- RP$products$product_id[1]
+  for (w in list(ch_heatmap(x[x$product_id %in% utils::head(unique(x$product_id), 20), ], RP$label_of),
+                 ch_store_trend(RP$store_daily), ch_trend(d[d$product_id == pid, ], NULL, NULL),
+                 ch_weekday_hour(RP$weekday_hour[RP$weekday_hour$product_id == pid, ]),
+                 ch_model_bars(RP$forecast_cv_overall, RP$forecast_eval_overall)))
+    try(plotly::plotly_build(w), silent = TRUE)
+  invisible(reactable::reactable(data.frame(a = 1)))
+}
+
 server <- function(input, output, session) {
   if (!length(STORE_DIRS)) return()
+  if (nzchar(Sys.getenv("RP_TIMING"))) {
+    t_start <- Sys.time(); n_flush <- 0L
+    if (nzchar(Sys.getenv("RP_PROFILE"))) Rprof(Sys.getenv("RP_PROFILE"), interval = 0.01)
+    session$onFlushed(function() {
+      n_flush <<- n_flush + 1L
+      message(sprintf("[timing] flush %d after %.2f s", n_flush, as.numeric(difftime(Sys.time(), t_start, units = "secs"))))
+      if (n_flush == 3L && nzchar(Sys.getenv("RP_PROFILE"))) Rprof(NULL)
+    }, once = FALSE)
+  }
   sid <- store_from_query(shiny::isolate(session$clientData$url_search))
   RP <- rp_get_store(STORE_DIRS, sid)
   if (!isTRUE(RP$ok)) return()
   sid <- as.character(RP$manifest$store_id)
-  rain_q <- stats::quantile(RP$daily$precpt, 0.9, na.rm = TRUE)
 
   # switching store reloads the page with ?store=<id> so every module starts clean
   shiny::observeEvent(input$store, {
@@ -135,14 +187,8 @@ server <- function(input, output, session) {
   first <- RP$recommendations$product_id[1] %||% RP$products$product_id[1]
   state <- shiny::reactiveValues(product = first, date = NULL, zthr = RP$manifest$thresholds$anomaly_z, horizon = 7)
 
-  anoms_r <- shiny::reactive(rp_classify_anomalies(RP$daily, state$zthr, rain_q))
-  build_recs <- function(params, zthr, growth = 1) {
-    an <- rp_classify_anomalies(RP$daily, zthr, rain_q)
-    ind <- rp_product_indicators(RP$daily, RP$forecast_next, RP$manifest$chosen_model, an, RP$risk_next,
-                                 RP$forecast_cv_product, RP$products[, c("product_id", "full_instock_days", "zero_sale_share")],
-                                 growth = growth)
-    rp_recommend(ind, params, risk_threshold = RP$manifest$risk_threshold)
-  }
+  anoms_r <- shiny::reactive(calc_anoms(RP, state$zthr))
+  build_recs <- function(params, zthr, growth = 1) calc_recs(RP, params, zthr, growth)
   recs_r <- shiny::reactive(build_recs(list(), state$zthr))
 
   goto_product <- function(pid, date = NULL) {
@@ -152,12 +198,26 @@ server <- function(input, output, session) {
   }
   goto_page <- function(page) bslib::nav_select("nav", page, session = session)
 
+  # Only the Overview starts immediately; every other page's server logic starts the
+  # first time that page is opened (less work per visit on small instances).
   mod_overview_server("ov", RP, state, anoms_r, recs_r, goto_product, goto_page)
-  mod_product_server("pr", RP, state, anoms_r, recs_r)
-  mod_monitor_server("mo", RP, state, anoms_r, goto_product)
-  mod_scenario_server("sc", RP, state, build_recs)
-  mod_methods_server("me", RP, state)
-  mod_report_server("rep", RP, state, recs_r, anoms_r)
+  starters <- list(
+    product  = function() mod_product_server("pr", RP, state, anoms_r, recs_r),
+    monitor  = function() mod_monitor_server("mo", RP, state, anoms_r, goto_product),
+    scenario = function() mod_scenario_server("sc", RP, state, build_recs),
+    methods  = function() mod_methods_server("me", RP, state),
+    report   = function() mod_report_server("rep", RP, state, recs_r, anoms_r))
+  started <- character()
+  shiny::observeEvent(input$nav, {
+    pg <- input$nav
+    if (pg %in% names(starters) && !pg %in% started) { started <<- c(started, pg); starters[[pg]]() }
+  })
+}
+
+if (length(STORE_DIRS)) {
+  t0 <- Sys.time()
+  try(warm_store(rp_get_store(STORE_DIRS, names(STORE_DIRS)[1])), silent = FALSE)
+  message(sprintf("RetailPulse results precomputed in %.1f s", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
 }
 
 shiny::shinyApp(ui, server)
