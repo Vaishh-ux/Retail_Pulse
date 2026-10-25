@@ -1,22 +1,21 @@
-# Render Blueprint - one Docker web service, no database needed
-# (all results are read-only artifacts produced at build time).
+# Render Blueprint - RetailPulse as a free STATIC SITE (no server, never sleeps).
+# All analysis runs in R before deployment:
+#   Rscript pipeline/run_pipeline.R      (per store)  -> outputs/
+#   Rscript scripts/knit_reports.R                     -> R Markdown reports
+#   Rscript scripts/export_static.R                    -> site/data/*.json + site/reports/
+# The generated site/ folder is committed, so Render only has to publish it.
+# The Shiny version (app/, Dockerfile) is still in the repository; see README.
 services:
   - type: web
-    name: retailpulse
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    plan: free             # no card needed; sleeps after ~15 min idle (first visit then takes ~1 min). Paid: starter/standard
-    healthCheckPath: /favicon.svg   # static file: answers even while R is busy
-    autoDeploy: true
-    envVars:
-      - key: RP_REBUILD
-        value: "false"     # true = re-run the analysis during the build
-      - key: RP_DATA_MODE
-        value: auto        # auto | real | synthetic
-      - key: RP_STORE_ID
-        value: auto        # or a specific store id from FreshRetailNet-50K
-      - key: RP_STORE_CACHE
-        value: "1"         # stores kept in memory; 1 suits the 512 MB free plan
-      - key: RP_ANOMALY_Z
-        value: "3"
+    name: retailpulse-site
+    runtime: static
+    buildCommand: echo "site/ is pre-built from the R pipeline"
+    staticPublishPath: ./site
+    pullRequestPreviewsEnabled: false
+    headers:
+      - path: /data/*
+        name: Cache-Control
+        value: public, max-age=3600
+      - path: /vendor/*
+        name: Cache-Control
+        value: public, max-age=604800, immutable
