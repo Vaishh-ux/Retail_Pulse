@@ -73,12 +73,32 @@ build_ui <- function(RP, sid) {
   )
 }
 
+# Built pages are cached per store: building the UI (and compiling the theme's Sass)
+# is the slowest part of a request, which matters on small instances.
+.ui_cache <- new.env(parent = emptyenv())
+cached_ui <- function(RP) {
+  sid <- as.character(RP$manifest$store_id)
+  if (is.null(.ui_cache[[sid]])) .ui_cache[[sid]] <- build_ui(RP, sid)
+  .ui_cache[[sid]]
+}
+
 ui <- function(req) {
   if (!length(STORE_DIRS)) return(fatal_ui(list(out_dir = OUT_DIR)))
   sid <- store_from_query(req$QUERY_STRING)
   RP <- rp_get_store(STORE_DIRS, sid)
   if (!isTRUE(RP$ok)) return(fatal_ui(RP))
-  build_ui(RP, as.character(RP$manifest$store_id))
+  cached_ui(RP)
+}
+
+# Warm up BEFORE the server starts listening: load the default store, build its page
+# and compile the theme, so the first request (and the host's health check) is fast.
+if (length(STORE_DIRS)) {
+  t0 <- Sys.time()
+  try({
+    RP0 <- rp_get_store(STORE_DIRS, names(STORE_DIRS)[1])
+    if (isTRUE(RP0$ok)) invisible(htmltools::renderTags(cached_ui(RP0)))
+  }, silent = FALSE)
+  message(sprintf("RetailPulse warm-up done in %.1f s", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
 }
 
 server <- function(input, output, session) {
