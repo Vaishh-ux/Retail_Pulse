@@ -75,11 +75,24 @@ build_ui <- function(RP, sid) {
 
 # Built pages are cached per store: building the UI (and compiling the theme's Sass)
 # is the slowest part of a request, which matters on small instances.
+# The final HTML is cached too, so a page request is a lookup instead of ~0.5 s of
+# rendering (several seconds on a 0.1-CPU free instance, which made the host's
+# HTTP port check time out).
 .ui_cache <- new.env(parent = emptyenv())
 cached_ui <- function(RP) {
   sid <- as.character(RP$manifest$store_id)
   if (is.null(.ui_cache[[sid]])) .ui_cache[[sid]] <- build_ui(RP, sid)
   .ui_cache[[sid]]
+}
+.html_cache <- new.env(parent = emptyenv())
+cached_page <- function(RP) {
+  sid <- as.character(RP$manifest$store_id)
+  if (is.null(.html_cache[[sid]])) {
+    html <- tryCatch(shiny:::renderPage(cached_ui(RP)), error = function(e) NULL)
+    if (is.null(html)) return(cached_ui(RP))          # fall back to normal rendering
+    .html_cache[[sid]] <- shiny::httpResponse(200L, "text/html; charset=UTF-8", html)
+  }
+  .html_cache[[sid]]
 }
 
 ui <- function(req) {
@@ -87,7 +100,7 @@ ui <- function(req) {
   sid <- store_from_query(req$QUERY_STRING)
   RP <- rp_get_store(STORE_DIRS, sid)
   if (!isTRUE(RP$ok)) return(fatal_ui(RP))
-  cached_ui(RP)
+  cached_page(RP)
 }
 
 # Warm up BEFORE the server starts listening: load the default store, build its page
@@ -96,6 +109,8 @@ if (length(STORE_DIRS)) {
   t0 <- Sys.time()
   try({
     RP0 <- rp_get_store(STORE_DIRS, names(STORE_DIRS)[1])
+    # build the page and compile the theme now; the final HTML is cached on the first
+    # request, because Shiny registers the page's script paths only once it is running
     if (isTRUE(RP0$ok)) invisible(htmltools::renderTags(cached_ui(RP0)))
   }, silent = FALSE)
   message(sprintf("RetailPulse warm-up done in %.1f s", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
