@@ -1,0 +1,19 @@
+body { font-family: Inter, "Segoe UI", system-ui, sans-serif; color: #16231F; background: #F8FAF8; }
+.main-container { max-width: 1100px; background: #fff; border: 1px solid #DDE5E0; border-radius: 14px; padding: 28px 36px; margin-top: 18px; box-shadow: 0 4px 14px rgba(23,59,53,.05); }
+h1, h2, h3, h4 { color: #173B35; font-weight: 750; letter-spacing: -.01em; }
+h1.title { font-size: 2.1rem; } h4.author, h4.date, h3.subtitle { color: #4C5A55; font-weight: 500; }
+h1 { border-bottom: 2px solid #DCEBE3; padding-bottom: 6px; margin-top: 34px; }
+a { color: #2F6B5E; }
+.tocify { border: 1px solid #DDE5E0; border-radius: 12px; background: #fff; }
+.list-group-item.active, .list-group-item.active:hover, .list-group-item.active:focus { background: #173B35; border-color: #173B35; }
+.tocify-extend-page { display: none; }
+table { font-size: .9rem; } thead th { color: #78857F; text-transform: uppercase; font-size: .76rem; letter-spacing: .04em; border-bottom: 2px solid #DDE5E0 !important; }
+.btn-default { border-color: #C5D3CC; color: #173B35; }
+pre { background: #F6F9F7; border: 1px solid #EBF0ED; border-radius: 8px; }
+.rp-exec { border: 1px solid #DDE5E0; border-left: 4px solid #D9A441; border-radius: 12px; padding: 14px 18px; margin: 18px 0 8px; background: #FFFDF8; }
+.rp-exec-h { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: #9A6E16; font-weight: 700; margin-bottom: 10px; }
+.rp-exec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.rp-exec-grid div { background: #fff; border: 1px solid #EBF0ED; border-radius: 10px; padding: 10px 12px; }
+.rp-exec-grid b { display: block; font-size: 1.6rem; color: #173B35; }
+.rp-exec-grid span { font-size: .82rem; color: #4C5A55; }
+@media print { .tocify, .btn, .code-folding-btn { display: none !important; } .main-container { border: 0; box-shadow: none; } }

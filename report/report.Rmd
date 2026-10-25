@@ -1,0 +1,311 @@
+---
+title: "RetailPulse: Demand Monitoring and Early Warning for Small Retailers"
+pagetitle: "RetailPulse report"
+subtitle: "CSI3005 Advanced Data Visualization Techniques · Case Study-Based Lab Assessment"
+author: "J Sai Vaishnavi (24MID0259)"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+    css: report.css
+    code_folding: hide
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 9, fig.height = 4.2, dpi = 150, fig.align = "center")
+suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(ggplot2); library(arrow); library(scales); library(patchwork) })
+root <- normalizePath(Sys.getenv("RP_ROOT", unset = ".."))
+out <- Sys.getenv("RP_OUTPUT_DIR", unset = file.path(root, "outputs"))
+pq <- function(n) tibble::as_tibble(arrow::read_parquet(file.path(out, paste0(n, ".parquet"))))
+js <- function(n) jsonlite::read_json(file.path(out, paste0(n, ".json")), simplifyVector = TRUE)
+m <- js("manifest"); q <- js("quality"); lv <- js("latent_validation")
+daily <- pq("daily"); prods <- pq("products"); recs <- pq("recommendations"); an <- pq("anomalies")
+pct <- function(x, d = 1) percent(x, accuracy = 10^-d)
+num <- function(x, d = 2) formatC(x, format = "f", digits = d, big.mark = ",")
+COL <- list(rec = "#5E6B66", dem = "#2F6B5E", so = "#DC5555", promo = "#D9A441", muted = "#86928D", forest = "#173B35", sage = "#DCEBE3", base = "#A9B5B0")
+theme_rp <- theme_minimal(base_size = 11) + theme(panel.grid.minor = element_blank(), plot.title = element_text(face = "bold"),
+  plot.title.position = "plot", legend.position = "top", legend.justification = "left", plot.caption = element_text(colour = "#6b6b6b", hjust = 0))
+theme_set(theme_rp)
+synthetic <- identical(m$mode, "synthetic")
+```
+
+```{r banner, echo=FALSE, results='asis'}
+if (synthetic) cat('<div style="background:#fdf3dc;border:1px solid #f0d49a;padding:10px 14px;border-radius:8px;margin:12px 0">',
+                   '<b>Demo mode.</b> This report was generated from <b>synthetic data</b> with the FreshRetailNet-50K schema, ',
+                   'because the real files were not available when it was built. All numbers and figures below are illustrative and are <b>not</b> findings about real stores. ',
+                   'Place the real Parquet files in <code>data/raw/</code>, re-run <code>pipeline/run_pipeline.R</code>, and re-knit this report.</div>')
+```
+
+```{r exec, echo=FALSE, results='asis'}
+ev0 <- pq("forecast_eval_overall"); rk0 <- pq("risk_metrics"); lv0 <- as.data.frame(lv$metrics)
+n_attn <- length(unique(recs$product_id[recs$urgency %in% c("High", "Medium")]))
+cat(sprintf('<div class="rp-exec"><div class="rp-exec-h">Store %s · %s products · %s to %s · %s</div><div class="rp-exec-grid">', m$store_id, m$products, m$date_min, m$date_max, if (synthetic) "SYNTHETIC demo data" else "real FreshRetailNet-50K data"))
+tile <- function(v, l) cat(sprintf('<div><b>%s</b><span>%s</span></div>', v, l))
+tile(pct(sum(daily$lost) / sum(daily$latent)), "of estimated demand went unmet because of stockouts")
+tile(pct(q$stockout_hour_rate), "of trading hours (06:00–22:00) were out of stock")
+tile(pct(ev0$WAPE[ev0$.model == m$chosen_model]), sprintf("forecast error (WAPE, %s) on the held-out week vs %s for seasonal naive", toupper(m$chosen_model), pct(ev0$WAPE[ev0$.model == "snaive"])))
+tile(n_attn, "products have a High or Medium recommendation")
+cat('</div></div>')
+```
+
+# Key business insights
+
+```{r insights, echo=FALSE, results='asis'}
+pv <- prods |> arrange(desc(unmet_share))
+wk <- pq("store_weekday_hour"); bh0 <- wk |> group_by(hour) |> summarise(v = mean(mean_sales)) |> arrange(desc(v))
+cat(sprintf("- **Stockouts hide demand.** An estimated %s of demand went unmet; %d of %d products lost more than 20%% of their estimated demand (worst: %s).\n",
+            pct(sum(daily$lost) / sum(daily$latent)), sum(prods$unmet_share > 0.2), nrow(prods),
+            paste(sprintf("P%s (%s)", head(pv$product_id, 3), pct(head(pv$unmet_share, 3), 0)), collapse = ", ")))
+cat(sprintf("- **Timing matters.** Store sales peak around %02d:00; products that sell out typically do so by %02.0f:00, so restocking before the main peak matters most.\n",
+            bh0$hour[1], median(prods$median_sellout_hour, na.rm = TRUE)))
+cat(sprintf("- **Forecasts are useful but imperfect.** %s beats the seasonal-naive baseline on the held-out week (WAPE %s vs %s) but over-forecasts (bias %s).\n",
+            toupper(m$chosen_model), pct(ev0$WAPE[ev0$.model == m$chosen_model]), pct(ev0$WAPE[ev0$.model == "snaive"]), pct(ev0$bias[ev0$.model == m$chosen_model])))
+cat(sprintf("- **Risk scores rank, they do not predict exactly.** Next-day stockout risk reaches AUC %s (baseline %s): useful for prioritising, not for certainty.\n",
+            num(rk0$AUC[rk0$set == "logistic_test"], 3), num(rk0$AUC[rk0$set == "frequency_baseline_test"], 3)))
+cat(sprintf("- **%d unusual product-days are unexplained** by a stockout, promotion, holiday or heavy rain, and are worth a manual check.\n", sum(an$cause == "Unexplained")))
+```
+
+# Problem and objective
+
+Small retailers of perishable goods re-order daily, usually by judgement. Ordering too little empties shelves; ordering too much causes spoilage. A hidden complication is that **recorded sales are not demand**: when a product is out of stock, sales stop even though customers still want it, so low-sales days caused by stockouts can be mistaken for weak demand and lead to further under-ordering.
+
+**Objective.** Using one store's data, (1) prepare the data and quantify stockouts, (2) estimate demand that was lost to stockouts, (3) forecast short-term demand and evaluate the forecasts honestly, (4) flag unusual sales days, (5) estimate next-day stockout risk, and (6) turn these into explainable, prioritised recommendations for the store owner.
+
+**Analytical questions.**
+
+1. How has demand for each product changed over time, and which low-sales days reflect stockouts rather than weak demand?
+2. Which product-days had sales unusually far from normal, and are those explained by stockouts, promotions or holidays?
+3. How much demand is expected next week, and how reliable is that forecast compared with a simple baseline?
+4. Which products are most likely to run out tomorrow, and which need attention first?
+
+# Dataset
+
+**Source:** FreshRetailNet-50K, published by Dingdong-Inc on Hugging Face under CC BY 4.0 (Wang et al., 2025, arXiv:2505.16319). The dataset card describes 50,000 store–product series of 90 days with hourly sales and hourly stock status from 898 stores in 18 cities, plus a 7-day evaluation split.
+
+**Data used in this report:** `r m$mode_note`. Store `r m$store_id`, `r m$products` products, `r m$date_min` to `r m$date_max` (training `r m$train_range[1]`–`r m$train_range[2]`, evaluation `r m$eval_range[1]`–`r m$eval_range[2]`).
+
+```{r attrs}
+tibble::tribble(
+  ~Attribute, ~Type, ~Use,
+  "store_id, product_id, category ids", "Categorical (encoded)", "Select the store; group products",
+  "dt", "Date", "Time axis; weekday features",
+  "sale_amount", "Quantitative (globally normalised)", "Daily recorded sales",
+  "hours_sale", "24 hourly values", "Hourly demand profiles; replay",
+  "hours_stock_status", "24 binary flags (1 = out of stock)", "Stockout hours; demand recovery",
+  "stock_hour6_22_cnt", "Integer 0–16", "Cross-checked against hourly flags",
+  "discount, activity_flag, holiday_flag", "Ratio; binary", "Promotion and holiday explanations",
+  "precpt, avg_temperature", "Quantitative", "Weather context")
+```
+
+**Not available in the data:** inventory on hand, prices, costs, supplier lead times and shelf life. Sales are normalised by an undisclosed factor, so all values are in *normalised units*. No order quantities or money values are produced anywhere in this project.
+
+# Data preparation
+
+```{r prep}
+tibble::tibble(
+  Check = c("Raw rows (product-days)", "Duplicate product-days removed", "Hourly lists not of length 24", "Hourly sum ≠ daily total (>0.05)",
+            "Negative sales", "Discount outside (0, 1]", "stock_hour6_22_cnt ≠ recount", "Missing product-days", "Clean rows"),
+  Count = c(q$rows_raw, q$duplicates_removed, q$hourly_wrong_length, q$hourly_daily_mismatch, q$negative_sales_rows,
+            q$discount_out_of_range, q$stock_count_mismatch, q$missing_product_days, q$rows_clean),
+  Treatment = c("–", "Kept first occurrence", "Row removed", "Daily total replaced by hourly sum", "Set to 0", "Set to 1.0",
+                "Recomputed from hourly flags (06:00–21:59)", "Reported", "–"))
+```
+
+The hourly lists were expanded into a 24-column sales matrix and a 24-column stock-status matrix. Stockout hours were counted only within trading hours (06:00–21:59), because overnight flags may mean "closed" rather than "sold out". Calendar features (weekday, weekend), promotion depth (1 − discount), and leakage-safe lags and rolling means (each using only days *before* the day described) were added. Overall, **`r pct(q$stockout_hour_rate)` of trading hours were out of stock**, and `r pct(q$share_days_any_stockout, 0)` of product-days had at least one out-of-stock trading hour.
+
+```{r inout, fig.height=3.6}
+iv <- pq("instock_vs_out")
+ggplot(iv, aes(hour, mean_sales, fill = status)) + geom_col(position = position_dodge(0.8), width = 0.75) +
+  scale_fill_manual(values = c("In stock" = COL$dem, "Out of stock" = COL$so), name = NULL) +
+  scale_x_continuous(breaks = seq(6, 21, 3), labels = function(x) sprintf("%02d:00", x)) +
+  labs(title = "Recorded sales almost vanish during out-of-stock hours",
+       x = "Hour of day (trading hours)", y = "Mean recorded sales per hour\n(normalised units)",
+       caption = "All products in the store. Out-of-stock hours are censored demand, not low demand.")
+```
+
+**Interpretation.** Recorded sales per out-of-stock hour average `r num(weighted.mean(iv$mean_sales[iv$status=="Out of stock"], iv$hours[iv$status=="Out of stock"]), 3)` against `r num(weighted.mean(iv$mean_sales[iv$status=="In stock"], iv$hours[iv$status=="In stock"]), 3)` per in-stock hour. Any analysis that treats recorded sales as demand would therefore under-estimate demand on stockout days.
+
+# Exploratory analysis
+
+```{r wdh, fig.height=3.4}
+w <- pq("store_weekday_hour") |> mutate(day = factor(c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")[weekday], levels = rev(c("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))))
+ggplot(w, aes(hour, day, fill = mean_sales)) + geom_tile(colour = "white", linewidth = 0.4) +
+  scale_fill_gradient(low = "#F3F7F5", high = COL$forest, name = "Mean sales\nper in-stock hour") +
+  scale_x_continuous(breaks = seq(0, 21, 3), labels = function(x) sprintf("%02d", x), expand = c(0, 0)) +
+  labs(title = "When does the store sell?", x = "Hour of day", y = NULL, caption = "Out-of-stock hours excluded.")
+```
+
+```{r wdhtext, echo=FALSE}
+bh <- w |> group_by(hour) |> summarise(v = mean(mean_sales)) |> arrange(desc(v))
+bd <- w |> group_by(weekday) |> summarise(v = mean(mean_sales)) |> arrange(desc(v))
+```
+
+**Interpretation.** Demand concentrates around `r sprintf("%02d:00", bh$hour[1])` and `r sprintf("%02d:00", bh$hour[2])`; the busiest weekday on average is `r c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday")[bd$weekday[1]]`. Restocking before the main peak matters most.
+
+```{r variab, fig.height=3.8}
+v <- pq("variability")
+ggplot(v, aes(mean_latent, cv, size = unmet_share, colour = unmet_share)) + geom_point(alpha = 0.85) +
+  scale_colour_gradient(low = "#B9D6C8", high = COL$so, labels = percent, name = "Unmet share") +
+  scale_size(range = c(1.5, 7), guide = "none") +
+  labs(title = "Products differ in volume, volatility and how much demand they lose",
+       x = "Mean estimated daily demand (normalised units)", y = "Coefficient of variation")
+```
+
+**Interpretation.** `r sum(v$unmet_share > 0.10)` of `r nrow(v)` products lose more than 10% of estimated demand to stockouts; these are the main candidates for earlier replenishment.
+
+# Stockout-aware demand estimation
+
+**Method.** For each product, an hourly demand profile (each hour's share of daily sales) is estimated from fully in-stock *training* days, separately for weekdays and weekends, and shrunk towards the product's overall profile. On a day with out-of-stock trading hours, the day's demand level is inferred from the in-stock hours (level = in-stock sales ÷ in-stock profile share), and the missing hours are filled with level × profile share. If under `r pct(m$thresholds$min_share_in, 0)` of the profile was in stock, a trailing 28-day median of in-stock days is used instead. *Assumption:* the hourly shape of demand is stable.
+
+**Validation.** On `r lv$n` fully in-stock training days, trading hours from a random cut-off (12:00–20:00) were hidden as if out of stock. The day total was then re-estimated using a profile that excludes that day.
+
+```{r latval}
+lm <- as.data.frame(lv$metrics)
+tibble::tibble(Method = c("Hourly-profile estimate", "Observed sales only (no adjustment)"),
+               MAE = num(lm$MAE, 3), WAPE = pct(lm$WAPE), Bias = pct(lm$bias))
+```
+
+```{r latfig, fig.height=3.6}
+bc <- pq("latent_validation_by_cutoff") |> pivot_longer(c(wape_profile, wape_observed), names_to = "method", values_to = "wape") |>
+  mutate(method = recode(method, wape_profile = "Hourly-profile estimate", wape_observed = "Observed sales only"))
+ggplot(bc, aes(cutoff_hour, wape, colour = method, linetype = method)) + geom_line(linewidth = 1) + geom_point() +
+  scale_colour_manual(values = c(COL$dem, COL$muted), name = NULL) + scale_linetype_manual(values = c("solid", "dashed"), name = NULL) +
+  scale_y_continuous(labels = percent, limits = c(0, NA)) +
+  labs(title = "The earlier a stockout starts, the more the adjustment matters", x = "Simulated stockout starts at (hour)", y = "WAPE")
+```
+
+**Interpretation.** Estimating the hidden hours reduces the day-total error from `r pct(lm$WAPE[2])` (ignoring the stockout) to `r pct(lm$WAPE[1])`, with bias `r pct(lm$bias[1])` versus `r pct(lm$bias[2])`. The gain is largest for early-afternoon stockouts. Across the whole period, estimated demand exceeds recorded sales by `r pct(sum(daily$lost)/sum(daily$latent))` of estimated demand. These are estimates and are always labelled as such.
+
+```{r trend, fig.height=4.6}
+pid <- recs$product_id[1]
+dp <- daily |> filter(product_id == pid)
+p1 <- ggplot(dp, aes(dt)) +
+  geom_rect(data = dp |> filter(promo == 1), aes(xmin = dt - 0.5, xmax = dt + 0.5, ymin = -Inf, ymax = Inf), fill = COL$promo, alpha = 0.15, inherit.aes = FALSE) +
+  geom_line(aes(y = sale_amount, colour = "Recorded sales"), linewidth = 0.6) +
+  geom_line(aes(y = latent, colour = "Estimated demand"), linewidth = 0.9) +
+  geom_point(data = dp |> filter(stock_h >= 4), aes(y = sale_amount, shape = "4+ h out of stock"), colour = COL$so, size = 2, stroke = 1) +
+  scale_colour_manual(values = c("Recorded sales" = COL$rec, "Estimated demand" = COL$dem), name = NULL) +
+  scale_shape_manual(values = c("4+ h out of stock" = 1), name = NULL) + expand_limits(y = 0) +
+  labs(title = sprintf("P%s: recorded sales vs estimated demand", pid), x = NULL, y = "Normalised units")
+p2 <- ggplot(dp, aes(dt, stock_h)) + geom_col(fill = COL$so, width = 0.8) + scale_y_continuous(limits = c(0, 16), breaks = c(0, 8, 16)) +
+  labs(x = "Date", y = "Out (h)")
+p1 / p2 + plot_layout(heights = c(3, 1))
+```
+
+**Interpretation.** For the highest-priority product (P`r pid`), stockouts occurred on `r sum(dp$stock_h >= 4)` of `r nrow(dp)` days with 4+ out-of-stock hours. On those days recorded sales (grey) drop while estimated demand (green) stays near its usual level: the drops are supply-side, not weaker demand. Gold bands mark promotions.
+
+# Demand forecasting
+
+**Method.** For each product, the series of estimated daily demand was forecast with a **seasonal-naive** baseline (same weekday last week) and with **ETS** (automatic exponential smoothing via `fable`). Evaluation: rolling-origin cross-validation inside the training period (origins `r paste(m$cv_origins, collapse = ", ")`, 7-day horizon), then a final hold-out test on the untouched evaluation week. The model was chosen on cross-validation only (**`r toupper(m$chosen_model)`**). Scores use **in-stock days only**, where recorded sales equal demand.
+
+```{r fctab}
+cv <- pq("forecast_cv_overall") |> mutate(Window = "Rolling-origin CV (training)")
+ev <- pq("forecast_eval_overall") |> mutate(Window = "Hold-out (evaluation week)")
+bind_rows(cv, ev) |> transmute(Window, Model = ifelse(.model == "ets", "ETS", "Seasonal naive"), `In-stock days` = n_instock,
+  MAE = num(MAE, 3), RMSE = num(RMSE, 3), WAPE = pct(WAPE), Bias = pct(bias), `80% PI coverage` = pct(coverage80, 0))
+```
+
+```{r fcfig, fig.height=3.4}
+bind_rows(cv, ev) |> mutate(Model = ifelse(.model == "ets", "ETS", "Seasonal naive")) |>
+  ggplot(aes(Window, WAPE, fill = Model)) + geom_col(position = position_dodge(0.75), width = 0.7) +
+  geom_text(aes(label = pct(WAPE)), position = position_dodge(0.75), vjust = -0.4, size = 3.4) +
+  scale_fill_manual(values = c(ETS = COL$dem, "Seasonal naive" = COL$base), name = NULL) +
+  scale_y_continuous(labels = percent, expand = expansion(mult = c(0, 0.15))) +
+  labs(title = "Forecast error on in-stock days (lower is better)", x = NULL, y = "WAPE")
+```
+
+```{r fctext, echo=FALSE}
+e_ets <- ev$WAPE[ev$.model == "ets"]; e_sn <- ev$WAPE[ev$.model == "snaive"]
+```
+
+**Interpretation.** On the evaluation week, ETS has WAPE `r pct(e_ets)` against `r pct(e_sn)` for the seasonal-naive baseline, so ETS `r if (e_ets < e_sn) "improves on" else "does not improve on"` the baseline. The 80% prediction intervals covered `r pct(ev$coverage80[ev$.model=="ets"], 0)` of in-stock days. Both models show positive bias on in-stock days. This is expected: the busiest days are the ones that sell out and are excluded, so the scored days are quieter than average. WAPE is unstable for products with many zero-sale days, so reliability is reported per product in the app.
+
+# Anomaly detection
+
+**Method.** Recorded sales are divided by a weekday factor estimated from the previous 56 days, then compared with the median of the previous 28 in-stock days (robust z = (value − median) ÷ (1.4826 × MAD), floored). Days with |z| ≥ `r m$thresholds$anomaly_z` are flagged and labelled with the strongest recorded explanation.
+
+```{r anfig, fig.height=3.4}
+an |> count(cause, direction) |> mutate(direction = ifelse(direction == "surge", "Surge", "Drop")) |>
+  ggplot(aes(reorder(cause, n), n, fill = direction)) + geom_col(width = 0.7) + coord_flip() +
+  scale_fill_manual(values = c(Surge = COL$promo, Drop = COL$dem), name = NULL) +
+  labs(title = "Most flags have a recorded explanation; the rest are worth checking", x = NULL, y = "Flagged product-days")
+```
+
+**Interpretation.** `r nrow(an)` product-days were flagged; `r sum(an$cause != "Unexplained")` coincide with a stockout, promotion, holiday or heavy rain, and `r sum(an$cause == "Unexplained")` are unexplained. There is no ground truth for anomalies, so no detection accuracy is claimed. These are statistical signals for the owner to check, not confirmed problems.
+
+# Next-day stockout risk
+
+```{r risktab}
+rm_ <- pq("risk_metrics")
+rm_ |> transmute(Set = recode(set, logistic_validation = "Logistic · validation", logistic_test = "Logistic · evaluation week", frequency_baseline_test = "Frequency baseline · evaluation week"),
+                 n, `Event rate` = pct(base_rate), AUC = num(AUC, 3), Brier = num(brier, 3), Precision = pct(precision, 0), Recall = pct(recall, 0), F1 = num(F1, 3),
+                 TP, FP, FN, TN)
+```
+
+**Method.** The target is whether a product is out of stock for `r m$thresholds$risk_event_hours`+ of 16 trading hours *tomorrow*. A logistic regression uses only information up to yesterday (recent stockout frequency and hours, yesterday's stockout, recent demand change), plus tomorrow's planned promotion, holiday and weekend flags. The split is chronological: fit `r m$risk_windows$fit[1]`–`r m$risk_windows$fit[2]`, choose the threshold (`r m$risk_threshold`) on validation `r m$risk_windows$validation[1]`–`r m$risk_windows$validation[2]`, and test on the evaluation week. Class balance is `r pct(m$risk_class_balance$fit)` events in the fit window, so precision, recall and F1 are reported rather than accuracy.
+
+```{r riskfig, fig.height=3.4}
+co <- pq("risk_coefficients") |> filter(term != "(Intercept)")
+ggplot(co, aes(odds_ratio, reorder(term, odds_ratio))) + geom_vline(xintercept = 1, linetype = "dotted", colour = COL$muted) +
+  geom_errorbarh(aes(xmin = or_lo95, xmax = or_hi95), height = 0.2, colour = COL$rec) + geom_point(colour = COL$dem, size = 2.6) +
+  scale_x_log10() + labs(title = "What raises the odds of a stockout tomorrow?", x = "Odds ratio (log scale, 95% CI)", y = NULL)
+```
+
+**Interpretation.** On the evaluation week, the logistic model reaches F1 `r num(rm_$F1[rm_$set=="logistic_test"], 3)` and AUC `r num(rm_$AUC[rm_$set=="logistic_test"], 3)`, against F1 `r num(rm_$F1[rm_$set=="frequency_baseline_test"], 3)` and AUC `r num(rm_$AUC[rm_$set=="frequency_baseline_test"], 3)` for the historical-frequency baseline. The score describes historical sell-out patterns; it does not know current stock on hand, which the dataset does not record.
+
+# Product-level risk findings
+
+```{r prodrisk}
+rn <- pq("risk_next")
+prods |> left_join(rn |> select(product_id, so_rate7), by = "product_id") |> arrange(desc(risk)) |> head(12) |>
+  transmute(Product = label, Category = category, `Next-day stockout risk` = pct(risk, 0), `Stockout days, last 7` = round(so_rate7 * 7),
+            `Unmet share (whole period)` = pct(unmet_share), `Days with a sell-out` = pct(sellout_share, 0),
+            `Median sell-out hour` = ifelse(is.na(median_sellout_hour), "rarely sells out", sprintf("%02.0f:00", median_sellout_hour)))
+```
+
+**Interpretation.** These products have the highest estimated probability of being out of stock for `r m$thresholds$risk_event_hours`+ trading hours tomorrow (`r rn$next_dt[1]`), assuming no promotion or holiday. The model threshold is `r pct(m$risk_threshold, 0)`; `r sum(rn$risk >= m$risk_threshold)` of `r nrow(rn)` products are above it. The score reflects historical sell-out patterns, not stock on hand.
+
+# Decision support
+
+Transparent rules (documented in the app and README) convert the results into actions: *consider replenishing earlier* (frequent recent stockouts with unmet demand), *investigate an unexplained drop*, *review a possible surge*, *plan for lower demand*, *use caution* (unreliable forecast), or *maintain the current approach*. Each recommendation shows its reason, evidence, urgency, reliability and the rule that produced it. The thresholds are design choices, not proven boundaries.
+
+```{r recs}
+recs |> distinct(product_id, .keep_all = TRUE) |> filter(action != "Maintain current approach") |> head(10) |>
+  transmute(Product = paste0("P", product_id), Action = action, Urgency = urgency, Reason = reason, Reliability = reliability)
+```
+
+# Findings and conclusion
+
+```{r find, echo=FALSE}
+n_rep <- length(unique(recs$product_id[recs$action == "Consider replenishing earlier"]))
+```
+
+- Stockouts affect `r pct(q$stockout_hour_rate)` of trading hours, and recorded sales almost stop during them. Estimated unmet demand is `r pct(sum(daily$lost)/sum(daily$latent))` of estimated demand.
+- The hourly-profile method recovers hidden demand with `r pct(lm$WAPE[1])` WAPE, against `r pct(lm$WAPE[2])` when stockouts are ignored.
+- ETS `r if (e_ets < e_sn) "outperforms" else "does not outperform"` the seasonal-naive baseline on the evaluation week (WAPE `r pct(e_ets)` vs `r pct(e_sn)`).
+- `r n_rep` products are flagged to *consider replenishing earlier*; `r sum(an$cause == "Unexplained" & an$direction == "drop")` unexplained sales drops deserve a check.
+
+**Conclusion.** Treating stockout-censored sales as demand understates demand and invites further stockouts. Combining hourly stock flags with an hourly demand profile gives a validated estimate of what was lost, a better basis for forecasting, and explainable early-warning actions. The main limitations are normalised units, no inventory or cost data, 90 days of history, and chain-store origin, so the outputs are directional decision support, not order quantities.
+
+# Limitations
+
+- Sales are globally normalised by an undisclosed factor: all values are normalised units, not money, kilograms or item counts.
+- There is no inventory, price, cost, lead-time or shelf-life field, so no order quantities, dates or financial losses are produced.
+- Overnight stock-status flags may mean "closed"; only 06:00–21:59 is used for stockout analysis.
+- Estimated demand assumes a stable hourly profile; its error is measured above and it is always labelled as an estimate.
+- 90 training days allow weekly patterns only. Forecasts beyond 7 days were not evaluated.
+- Promotion effects are observational associations, not causal effects. The monitoring page replays historical data and is not a live feed.
+- The stores belong to one large operator, so results are a proxy for a small independent shop.
+
+# References
+
+1. Wang, Y. et al. (2025). *FreshRetailNet-50K: A Stockout-Annotated Censored Demand Dataset for Latent Demand Recovery and Forecasting in Fresh Retail.* arXiv:2505.16319.
+2. Dingdong-Inc (2025). *FreshRetailNet-50K* (v1.0, CC BY 4.0). https://huggingface.co/datasets/Dingdong-Inc/FreshRetailNet-50K
+3. Hyndman, R. J. and Athanasopoulos, G. (2021). *Forecasting: Principles and Practice*, 3rd ed. OTexts.
+4. Cleveland, W. S. and McGill, R. (1984). Graphical perception. *Journal of the American Statistical Association*, 79(387), 531–554.
+
+*Generated `r m$generated_at` with `r m$r_version`. The R code for the analysis is in `R/` and `pipeline/`; the code for each figure is shown with "Code" buttons above.*

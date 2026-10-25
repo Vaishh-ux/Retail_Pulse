@@ -1,0 +1,10 @@
+.git
+data/processed
+report/report.html
+app/www/report.html
+app/www/reports
+docs/screenshots
+tests/ui
+__pycache__
+.pytest_cache
+.env

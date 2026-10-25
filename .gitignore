@@ -1,0 +1,22 @@
+# data (CC BY 4.0, but large - download instead of committing)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+# generated report (results in outputs/ ARE committed: ~5 MB, computed from the real data)
+app/www/report.html
+app/www/reports/
+report/report.html
+report/*_files/
+docs/screenshots/*.tmp
+# R / editors / OS
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+.DS_Store
+# python test tooling
+__pycache__/
+.pytest_cache/
+# local env
+.env

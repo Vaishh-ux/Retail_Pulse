@@ -1,0 +1,55 @@
+{
+  "project": "RetailPulse",
+  "mode": "real",
+  "mode_note": "FreshRetailNet-50K (Dingdong-Inc, CC BY 4.0)",
+  "store_id": 18,
+  "products": 164,
+  "date_min": "2024-03-28",
+  "date_max": "2024-07-02",
+  "train_range": ["2024-03-28", "2024-06-25"],
+  "eval_range": ["2024-06-26", "2024-07-02"],
+  "chosen_model": "ets",
+  "cv_origins": ["2024-05-28", "2024-06-04", "2024-06-11", "2024-06-18"],
+  "evaluated_horizon": 7,
+  "horizon_max": 14,
+  "risk_threshold": 0.27,
+  "risk_windows": {
+    "fit": ["2024-04-25", "2024-06-11"],
+    "validation": ["2024-06-12", "2024-06-25"],
+    "test": ["2024-06-26", "2024-07-02"]
+  },
+  "risk_class_balance": {
+    "fit": 0.328506097560976,
+    "validation": 0.36411149825784,
+    "test": 0.344947735191638
+  },
+  "thresholds": {
+    "stockout_day_hours": 8,
+    "risk_event_hours": 4,
+    "anomaly_z": 3,
+    "baseline_window": 28,
+    "min_share_in": 0.25
+  },
+  "rules": {
+    "stockout_days_thr": 3,
+    "lost_share_thr": 0.1,
+    "surge_ratio": 1.25,
+    "decline_ratio": 0.8,
+    "wape_low_reliability": 0.45,
+    "min_instock_days": 20,
+    "w_lost": 1,
+    "w_risk": 1,
+    "w_anomaly": 1
+  },
+  "generated_at": "2026-10-25 16:19:48 Asia",
+  "runtime_seconds": 292.1,
+  "r_version": "R version 4.4.3 (2025-02-28)",
+  "packages": {
+    "dplyr": "1.2.1",
+    "arrow": "25.0.0",
+    "fable": "0.5.0",
+    "fabletools": "0.8.0",
+    "survival": "3.8.12",
+    "slider": "0.3.3"
+  }
+}
