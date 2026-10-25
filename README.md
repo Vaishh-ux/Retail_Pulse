@@ -222,7 +222,7 @@ All results below are on the real store-18 data.
 | "RetailPulse results not found" page | `outputs/` not in the image | Make sure `outputs/` was pushed to the repository |
 | Port or health-check failure | App not listening on `$PORT` | Do not override `PORT`; keep `CMD ["Rscript","app/run.R"]` |
 
-**Costs and limits:** the Free instance type sleeps after inactivity, so the first request then takes a while, and it has 512 MB RAM. Measured usage (about 400–450 MB after a full test session) is close to the 512 MB of the Free and Starter instance types: it works for a demo, but choose **Standard (2 GB)** for several simultaneous users, or set `RP_STORE_CACHE=1`. `render.yaml` uses the Starter plan for an always-on service; check Render's current pricing before choosing a plan.
+**Costs and limits:** the Free instance type sleeps after inactivity, so the first request then takes a while, and it has 512 MB RAM. Measured usage (about 400–450 MB after a full test session) is close to the 512 MB of the Free and Starter instance types: it works for a demo, but choose **Standard (2 GB)** for several simultaneous users, or set `RP_STORE_CACHE=1`. `render.yaml` uses the Free plan (no card needed); change `plan:` to `starter` or `standard` for an always-on service, after checking Render's current pricing.
 
 ---
 
