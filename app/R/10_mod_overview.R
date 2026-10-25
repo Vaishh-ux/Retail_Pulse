@@ -72,6 +72,13 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
     ns <- session$ns
     rng <- range(RP$daily$dt); last_dt <- rng[2]
     action_filter <- shiny::reactiveVal("")
+    # Outputs are cached across visitors (shiny::bindCache): everyone with the same
+    # store, period, category and threshold gets the already-rendered result.
+    sid <- as.character(RP$manifest$store_id)
+    ckey <- shiny::reactive(list(sid, period(), input$cat %||% "", state$zthr))
+    # cached plots are not rebuilt in this session, so register their click events here
+    session$userData$plotlyShinyEventIDs <- unique(c(session$userData$plotlyShinyEventIDs,
+      paste("plotly_click", ns(c("heat", "top", "cats")), sep = "-")))
 
     # ---- filters ----
     shiny::observeEvent(input$period, {
@@ -134,7 +141,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
                "triangle-exclamation", if (high > 0) "warning" else "good"),
         rp_kpi(sprintf("Forecast error (%s)", toupper(m$chosen_model)), fmt_pct(w_chosen, 1),
                sprintf("WAPE on the held-out week; seasonal naive %s. Lower is better.", fmt_pct(w_base, 1)), "bullseye", "neutral"))
-    })
+    }) |> shiny::bindCache(ckey())
 
     # ---- trend ----
     agg_daily <- shiny::reactive({
@@ -142,7 +149,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
       a <- stats::aggregate(cbind(observed = sale_amount, latent = latent, stockout_hours = stock_h) ~ dt + split, x, sum)
       a[order(a$dt), ]
     })
-    output$store <- plotly::renderPlotly(ch_store_trend(agg_daily()))
+    output$store <- plotly::renderPlotly(ch_store_trend(agg_daily())) |> shiny::bindCache(sid, period(), input$cat %||% "")
     output$store_note <- shiny::renderUI({
       a <- agg_daily()
       gap <- sum(a$latent - a$observed)
@@ -151,7 +158,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
                       period_label(), fmt_num(gap, 1), fmt_pct(gap / max(sum(a$latent), 1e-9), 1), format(worst$dt, "%a %d %b"),
                       fmt_num(worst$latent - worst$observed, 1), as.integer(worst$stockout_hours)),
               "Estimated demand is a model output, not a measurement.")
-    })
+    }) |> shiny::bindCache(sid, period(), input$cat %||% "")
 
     # ---- stock alerts ----
     output$alerts <- shiny::renderUI({
@@ -177,7 +184,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
       })
       htmltools::tagList(htmltools::div(class = "rp-alert-list", items),
         rp_note(sprintf("Top %d of %d products that meet the stockout rule (R1). Risk is a historical-pattern score for tomorrow, not stock on hand: the data has no inventory field.", nrow(r), n_total)))
-    })
+    }) |> shiny::bindCache(sid, input$cat %||% "", state$zthr)
     shiny::observeEvent(input$alert_click, goto_product(input$alert_click))
     shiny::observeEvent(input$to_monitor, goto_page("monitor"))
 
@@ -196,7 +203,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
       htmltools::div(class = "rp-actions",
         tile("", length(unique(r$product_id[r$action != "Maintain current approach"])), "All products needing action", "layer-group"),
         lapply(names(icons)[counts > 0], function(a) tile(a, counts[[a]], a, icons[[a]])))
-    })
+    }) |> shiny::bindCache(ckey(), action_filter())
     shiny::observeEvent(input$action_pick, action_filter(input$action_pick))
 
     output$queue <- reactable::renderReactable({
@@ -218,7 +225,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
           Reliability = reactable::colDef(name = "Forecast", width = 90, cell = function(v) rp_badge(v, c(High = "good", Medium = "neutral", Low = "warning")[[v]])),
           Priority = reactable::colDef(width = 80, format = reactable::colFormat(digits = 2))
         ))
-    })
+    }) |> shiny::bindCache(ckey(), action_filter())
     shiny::observeEvent(input$queue_click, goto_product(input$queue_click))
 
     # ---- quick insights ----
@@ -272,7 +279,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
             sprintf("Compared within the same %d products on mostly in-stock days. This is an association, not a measured promotion effect.", nrow(wide)))
       }
       htmltools::div(class = "rp-insights", ins)
-    })
+    }) |> shiny::bindCache(ckey())
 
     # ---- top products & categories ----
     output$top <- plotly::renderPlotly({
@@ -280,7 +287,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
       tp <- stats::aggregate(cbind(observed = sale_amount, latent = latent) ~ product_id, x, sum)
       tp$unmet_share <- (tp$latent - tp$observed) / pmax(tp$latent, 1e-9)
       ch_top_products(utils::head(tp[order(-tp$latent), ], 12), source = ns("top"))
-    })
+    }) |> shiny::bindCache(sid, period(), input$cat %||% "")
     shiny::observeEvent(plotly::event_data("plotly_click", source = ns("top")), {
       ev <- plotly::event_data("plotly_click", source = ns("top"))
       pid <- suppressWarnings(as.integer(sub("^P", "", ev$y %||% "")))
@@ -297,7 +304,7 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
       cp$category <- paste("Category", cp$first_category_id)
       cp <- utils::head(cp[order(-cp$latent), ], 12)
       ch_categories(cp, source = ns("cats"))
-    })
+    }) |> shiny::bindCache(sid, period())
     shiny::observeEvent(plotly::event_data("plotly_click", source = ns("cats")), {
       ev <- plotly::event_data("plotly_click", source = ns("cats"))
       cid <- suppressWarnings(as.integer(sub("^Category ", "", ev$y %||% "")))
@@ -317,12 +324,12 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
     output$heat_wrap <- shiny::renderUI({
       n <- length(unique(heat_data()$product_id))
       plotly::plotlyOutput(ns("heat"), height = paste0(max(320, 120 + 13 * n), "px"))
-    })
+    }) |> shiny::bindCache(ckey(), input$heat_rows %||% "")
     output$heat <- plotly::renderPlotly({
       x <- heat_data(); if (!nrow(x)) return(rp_empty_plot("No products in this category"))
       p <- period()
       ch_heatmap(x, RP$label_of, source = ns("heat"), mode = input$heat_mode %||% "z", start = p[1], end = p[2])
-    })
+    }) |> shiny::bindCache(ckey(), input$heat_rows %||% "", input$heat_mode %||% "")
     shiny::observeEvent(plotly::event_data("plotly_click", source = ns("heat")), {
       ev <- plotly::event_data("plotly_click", source = ns("heat"))
       if (is.null(ev$y) || is.null(ev$x)) return()
@@ -339,6 +346,6 @@ mod_overview_server <- function(id, RP, state, anoms_r, recs_r, goto_product, go
       rp_note(sprintf("Showing %d of %d products, ordered by product ID; the selection ranks products by the size of their flags in the period. ", shown, length(cat_ids())),
               sprintf("In this period, %d product-days were flagged at |z| ≥ %.1f: %d explained by a stockout, promotion, holiday or rain, and %d unexplained. ",
                       nrow(a), state$zthr, sum(a$cause != "Unexplained"), sum(a$cause == "Unexplained")), legend)
-    })
+    }) |> shiny::bindCache(ckey(), input$heat_rows %||% "", input$heat_mode %||% "")
   })
 }
