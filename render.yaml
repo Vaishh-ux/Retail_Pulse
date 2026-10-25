@@ -17,6 +17,6 @@ services:
       - key: RP_STORE_ID
         value: auto        # or a specific store id from FreshRetailNet-50K
       - key: RP_STORE_CACHE
-        value: "2"         # stores kept in memory; 1 = lowest memory use
+        value: "1"         # stores kept in memory; 1 suits the 512 MB free plan
       - key: RP_ANOMALY_Z
         value: "3"
