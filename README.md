@@ -53,35 +53,34 @@ The **R Markdown report** (ggplot2 figures, inline-computed interpretation, R co
 
 ## Technology choice
 
-**Everything is in R**: the pipeline in R with tidyverse, `fable` and `survival`, the dashboard in **Shiny** with `bslib`, `plotly` and `reactable`, and the report in **R Markdown** with `ggplot2`. It ships as **one Docker web service on Render**.
+**Analysis in R, dashboard in the browser.**
 
-Why:
-- The faculty brief requires visualizations "implemented in R using appropriate R visualization libraries", and the rubric marks "correctly implemented in R". A separate JavaScript frontend would move the marked visualizations out of R.
-- R has mature, well-documented tools for exactly these methods (ETS via `fable`, survival curves, logistic regression).
-- One service means one deployment, no API contract to keep in sync, and no database to run. All results are read-only artifacts computed at build time.
-- R 4.4 and every package come from **conda-forge**, pinned in `environment.yml`. The Render build therefore does not compile packages from source or depend on CRAN mirrors.
+- **R does all the analysis**: the pipeline in R with tidyverse, `fable` and `survival` (`pipeline/run_pipeline.R`), and the academic report in **R Markdown** with `ggplot2` (`report/report.Rmd`).
+- **The deployed dashboard is a static website** (`site/`: HTML, CSS, JavaScript and Plotly.js) that reads the R results as JSON. It is published as a **free Render Static Site**: no server, nothing to wake up, opens in about a second.
+- The only calculations done in the browser are the cheap, transparent steps that react to the user's settings: anomaly classification at the chosen threshold, the decision rules R1–R6, priority weights and scenario multipliers. They are line-by-line ports of `R/anomaly.R`, `R/decide.R` and `R/scenario.R`, and `tests/static/parity.test.js` checks that the browser gives **exactly the same recommendations and anomaly counts as R** for every shipped store.
+- **The Shiny version is kept** (`app/`, `Dockerfile`): the same six pages written in R/Shiny with `bslib`, `plotly` and `reactable`. It is fully tested, but on Render's free 0.1-CPU instance it was too slow (sleeping server plus R rendering per visitor), which is why the static build is the default deployment. Run it locally with `PORT=3838 Rscript app/run.R`, or deploy it with the Dockerfile on a paid instance.
 
-**No database.** Nothing in the app is user-generated or needs to persist between requests. Results are deterministic outputs of the pipeline, so they are baked into the image. Render's filesystem is not relied on for durable storage.
+Why not a server at all: nothing in the dashboard is user-generated or needs to persist, and every model result is a deterministic output of the R pipeline. Precomputing them removes the database, the API and the cold starts.
 
 ---
 
 ## Architecture
 
 ```
-          build time (Docker build on Render, or locally)                    run time (web service)
- ┌───────────────────────────────────────────────────────────────┐      ┌──────────────────────────────┐
- │ data/raw/*.parquet  ──or──  Hugging Face download  ──or── demo │      │ Rscript app/run.R            │
- │            │                                                   │      │  binds 0.0.0.0:$PORT         │
- │            ▼                                                   │      │  reads outputs/app_bundle.rds│
- │ pipeline/run_pipeline.R  (R/: validate → clean → latent demand │ ───▶ │  5 Shiny pages (plotly)      │
- │   → features → forecasts → anomalies → risk → sell-out → replay│      │  /report.html (R Markdown)   │
- │   → scenarios → decision rules)                                │      └──────────────────────────────┘
- │            ▼                                                   │
- │ outputs/*.parquet, *.json, app_bundle.rds  +  report.html      │
- └───────────────────────────────────────────────────────────────┘
+  R (locally, before deployment)                                       browser (Render Static Site, free)
+ ┌──────────────────────────────────────────────────────────────┐    ┌───────────────────────────────────┐
+ │ data/raw/train.parquet, eval.parquet  (FreshRetailNet-50K)   │    │ site/index.html + js/ + Plotly.js │
+ │            ▼                                                 │    │  6 pages: Overview, Product,      │
+ │ pipeline/run_pipeline.R  per store: validate → clean →       │    │  Monitoring (historical replay),  │
+ │   latent demand → features → forecasts → anomalies → risk →  │    │  Forecast & Scenarios, Data &     │
+ │   sell-out → replay → scenarios → decision rules  → outputs/ │──▶ │  Methods, Report                  │
+ │ scripts/knit_reports.R   → R Markdown report per store       │    │  re-runs only the rules R1–R6,    │
+ │ scripts/export_static.R  → site/data/store_<id>.json,        │    │  anomaly threshold and scenario   │
+ │                            site/reports/report_<id>.html     │    │  multipliers (same logic as R)    │
+ └──────────────────────────────────────────────────────────────┘    └───────────────────────────────────┘
 ```
 
-Model fitting never happens inside a web request. The app sources the same R functions to recompute **rule-based** outputs instantly when users change thresholds or weights.
+Rebuild everything after changing the analysis: `Rscript pipeline/run_pipeline.R` (with `RP_STORE_ID` / `RP_OUTPUT_DIR` for extra stores), then `sh scripts/build_site.sh`.
 
 ---
 
@@ -178,6 +177,10 @@ With a plain R installation instead: `install.packages(c("dplyr","tidyr","lubrid
 ```bash
 Rscript tests/run_tests.R                      # R unit + integration tests (needs outputs/ for app checks)
 
+# static dashboard: JS rules must equal R, then browser tests
+node tests/static/parity.test.js
+(cd site && python3 -m http.server 8080 &) ; RP_URL=http://127.0.0.1:8080 pytest tests/static -q
+
 # browser tests (Playwright) against a running app
 pip install playwright pytest && playwright install chromium
 PORT=3838 Rscript app/run.R &
@@ -188,7 +191,9 @@ RP_URL=http://127.0.0.1:3838 pytest tests/ui -q
 All results below are on the real store-18 data.
 
 - `tests/run_tests.R`: **133 expectations passed, 0 failed, 0 skipped.** Covers schema; duplicate, wrong-length and mismatch handling; trading-hour stockout counting; leakage-free lags and rolling means (including that changing today's value does not change today's features); latent-demand invariants and exact recovery of a known profile; validation beating observed-only; forecast metric formulas and empty-input handling; forecast output shape and the eval window being after training; anomaly baseline independence from the day's own value; stockout-labelled anomalies; classification metrics; chronological risk split; every decision rule (including the surge reason text); weights reordering without changing urgency; sell-out censoring; replay alerts not using future hours; output consistency; every chart builder with empty and real inputs (including the new top-product, category and heatmap modes); the store registry (all shipped stores load, unknown store falls back, real and synthetic stores are never mixed); and the scenario demand change feeding the surge/decline rules.
-- `tests/ui` (Playwright): **16 passed.** Overview cards and real-data label; period and category filters change the KPIs (and restore them); action tiles filter the queue; all three heatmap modes render; a stock alert, a queue row and a heatmap cell each open the right product (and date); product comparison adds a line to the trend; horizon warning beyond 7 days; replay play, pause, reset and jump-to-day; alert filters and detail view; the scenario comparison recalculates (forecast × 1.4 for +40%) and draws the scenario line; the threshold is shared across pages; all Methods tabs render; report link returns 200 and the HTML and CSV downloads contain data; switching store reloads with `?store=<id>`; no horizontal scroll at 390 px; no JavaScript errors.
+- `tests/static/parity.test.js`: **identical** recommendations (action, urgency, reliability, priority, rule, order) and anomaly counts to R for stores 18, 235 and 263; the scenario growth scales the forecast ratio exactly.
+- `tests/static` (Playwright, static site): **19 passed.** Same interactions as the Shiny tests below, plus: the page re-computes R's results at default settings, table search and sorting, product search, the weight sliders reorder the queue, all five CSV downloads, the phone menu, and no horizontal scroll at 390 px. The Overview's KPIs appear about 1 s after opening the page.
+- `tests/ui` (Playwright, Shiny version): **16 passed.** Overview cards and real-data label; period and category filters change the KPIs (and restore them); action tiles filter the queue; all three heatmap modes render; a stock alert, a queue row and a heatmap cell each open the right product (and date); product comparison adds a line to the trend; horizon warning beyond 7 days; replay play, pause, reset and jump-to-day; alert filters and detail view; the scenario comparison recalculates (forecast × 1.4 for +40%) and draws the scenario line; the threshold is shared across pages; all Methods tabs render; report link returns 200 and the HTML and CSV downloads contain data; switching store reloads with `?store=<id>`; no horizontal scroll at 390 px; no JavaScript errors.
 - **Production start-up replica.** The Dockerfile steps were reproduced in a clean copy with a fresh environment created from `environment.yml`: pipeline, report, then `Rscript app/run.R` on `0.0.0.0:$PORT`. Results: `/` returns 200, `/report.html` returns 200, and the 9 UI tests pass. Memory was 287 MB idle and 368 MB after a full UI session on demo data, and about 400 MB after the UI tests on the real data. With the redesigned UI and two stores visited, the clean copy used about 450 MB after all 16 UI tests; `RP_STORE_CACHE` (default 2) caps how many stores stay in memory.
 - **Build-step replica.** The Dockerfile's build step (precomputed outputs → `scripts/knit_reports.R`) was run in a copy without the raw Parquet files.
 - **Not verified:** a real `docker build` (Docker Hub was blocked in the development environment), the Hugging Face download (`RP_REBUILD=true` path), and a live Render deployment.
@@ -197,32 +202,21 @@ All results below are on the real store-18 data.
 
 ## Deploy on Render
 
-**Service type:** one **Web Service** with the **Docker** runtime. No database, worker or disk is needed.
+**Default: free Static Site** (no server, does not sleep, no card needed).
 
-1. Push this folder to a GitHub repository (already done for `Vaishh-ux/retailpulse` if you followed the hand-off):
-   ```bash
-   git init && git add . && git commit -m "RetailPulse" && git branch -M main
-   git remote add origin https://github.com/<you>/retailpulse.git && git push -u origin main
-   ```
-2. **With the Blueprint (recommended):** in Render go to **New → Blueprint**, select the repository, and Render reads `render.yaml`. **Manually:** go to **New → Web Service**, connect the repository, choose **Runtime: Docker**, leave the Dockerfile path as `./Dockerfile`, and set the **Health Check Path** to `/`.
-3. Build and start commands come from the Dockerfile, so leave the fields empty. The build installs R from conda-forge, uses the committed real-data results in `outputs/`, and knits one report per store with `scripts/knit_reports.R` (with `RP_REBUILD=true` it re-runs `pipeline/run_pipeline.R` first, for the default store and `RP_EXTRA_STORES`). The start command is `Rscript app/run.R`, which binds to `0.0.0.0:$PORT`; Render sets `PORT`.
-4. Environment variables (optional; defaults are in `render.yaml` and `.env.example`): `RP_REBUILD`, `RP_DATA_MODE`, `RP_STORE_ID`, `RP_ANOMALY_Z`. No secrets are needed.
-5. **Verify:** the build log should show `Using precomputed outputs: "mode": "real"`. Open the service URL: the navbar should read **Store 18 · 2024-03-28 – 2024-07-02** and there must be **no** yellow demo banner. Then check `/report.html`, the Report page, and switch store in the navbar.
+1. The repository is on GitHub: `https://github.com/Vaishh-ux/Retail_Pulse` (branch `main`). `site/` is committed, pre-built from the R results.
+2. In Render: **New → Blueprint**, paste the repository URL (or pick it if your GitHub account is connected), and **Apply**. `render.yaml` creates one **Static Site** called `retailpulse-site` that publishes `./site`.
+   *Manually:* **New → Static Site**, choose the repository, **Build command** `echo ok`, **Publish directory** `site`.
+3. When it shows **Live**, open the `.onrender.com` URL. The navbar should read **Real data · FreshRetailNet-50K** and **Store 18**.
+4. After changing the analysis: re-run the R pipeline and `sh scripts/build_site.sh`, commit `site/`, and push. Render redeploys the site (or click **Manual Deploy** for a public-URL Blueprint).
 
-**Logs:** the service's **Logs** tab shows build and runtime logs; the **Events** tab shows deploy history.
-
-**Troubleshooting:**
+**Shiny version on Render (optional, paid instance recommended).** The `Dockerfile` still builds the R/Shiny app (R from conda-forge, `CMD ["Rscript","app/run.R"]` on `0.0.0.0:$PORT`, health check `/favicon.svg`). It deployed and went **Live** on Render's free instance, but pages were slow there (about 0.1 CPU, and the instance sleeps after ~15 minutes). To use it, create a **Web Service** with runtime **Docker** from this repository, on a Starter or Standard instance.
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| Build log shows `SYNTHETIC DEMO MODE` | `outputs/` missing from the repo and the download failed | Commit `outputs/` (it is not git-ignored), or keep `RP_REBUILD=false` |
-| `RP_DATA_MODE=real but no ... Parquet files` | As above, with strict mode | As above |
-| Build is slow or times out | Large conda environment | Retry the deploy; the build normally takes several minutes, mostly the environment install |
-| Instance restarts with out of memory | 512 MB plan under several concurrent users | Upgrade to a plan with more RAM (Standard) |
-| "RetailPulse results not found" page | `outputs/` not in the image | Make sure `outputs/` was pushed to the repository |
-| Port or health-check failure | App not listening on `$PORT` | Do not override `PORT`; keep `CMD ["Rscript","app/run.R"]` |
-
-**Costs and limits:** the Free instance type sleeps after inactivity, so the first request then takes a while, and it has 512 MB RAM. Measured usage (about 400–450 MB after a full test session) is close to the 512 MB of the Free and Starter instance types: it works for a demo, but choose **Standard (2 GB)** for several simultaneous users, or set `RP_STORE_CACHE=1`. `render.yaml` uses the Free plan (no card needed); change `plan:` to `starter` or `standard` for an always-on service, after checking Render's current pricing.
+| Static site shows "Could not load data/index.json" | `site/data/` not pushed | Run `sh scripts/build_site.sh`, commit `site/`, push |
+| Page loads but a store is missing | Store not exported | Run the pipeline for it, then `scripts/build_site.sh` |
+| Shiny service: "No open HTTP ports detected" | Instance too slow to answer the first request | Use the static site, or a larger instance |
 
 ---
 
@@ -269,10 +263,11 @@ No rule outputs order quantities, reorder dates or money: the dataset has no inv
 ```
 R/                 analysis functions (config, data_io, synth, prepare, latent, forecast, anomaly, risk, sellout, monitor, scenario, decide)
 pipeline/          run_pipeline.R - runs everything, writes outputs/
-app/               app.R, run.R (production entry), R/ (data, theme, charts, 6 page modules), www/ (CSS, favicon; reports knitted at build)
-scripts/           knit_reports.R - knits report/report.Rmd once per shipped store
+site/              static dashboard (deployed): index.html, css/, js/ (core = R rules ported, ui, charts, 6 pages), vendor/plotly, data/*.json, reports/
+app/               Shiny version: app.R, run.R, R/ (data, theme, charts, 6 page modules), www/
+scripts/           knit_reports.R (R Markdown per store), export_static.R (R results -> site/data), build_site.sh
 report/            report.Rmd - academic report (ggplot2, interpretation, code)
-tests/testthat/    R unit and integration tests;  tests/ui/ Playwright browser tests and screenshot script
+tests/testthat/    R unit and integration tests;  tests/static/ parity + Playwright tests for site/;  tests/ui/ Playwright tests for the Shiny app
 data/raw/          put FreshRetailNet-50K Parquet files here (git-ignored)
 outputs/           precomputed real-data results (committed): default store + stores/<id>/
 docs/screenshots/  screenshots of the running app (real data, store 18)
