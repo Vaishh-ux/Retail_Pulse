@@ -62,10 +62,15 @@ rp_recommend <- function(ind, params = list(), risk_threshold = 0.5) {
   p <- utils::modifyList(RP_RULE_DEFAULTS, params)
   p$risk_thr <- p$risk_thr %||% risk_threshold
   ind$reliability <- rp_reliability(ind$cv_wape, ind$full_instock_days, ind$zero_sale_share, p)
-  recs <- list()
+  # accumulate plain vectors and build one table at the end (building a tibble per
+  # recommendation made this function ~10x slower)
+  acc <- list(product_id = integer(), action = character(), reason = character(), evidence = character(),
+              urgency = character(), reliability = character(), rule = character())
   add <- function(i, action, reason, evidence, urgency, rule) {
-    recs[[length(recs) + 1]] <<- tibble::tibble(product_id = ind$product_id[i], action = action, reason = reason,
-      evidence = evidence, urgency = urgency, reliability = ind$reliability[i], rule = rule)
+    acc$product_id <<- c(acc$product_id, ind$product_id[i]); acc$action <<- c(acc$action, action)
+    acc$reason <<- c(acc$reason, reason); acc$evidence <<- c(acc$evidence, evidence)
+    acc$urgency <<- c(acc$urgency, urgency); acc$reliability <<- c(acc$reliability, ind$reliability[i])
+    acc$rule <<- c(acc$rule, rule)
   }
   for (i in seq_len(nrow(ind))) {
     r <- ind[i, ]
@@ -115,11 +120,11 @@ rp_recommend <- function(ind, params = list(), risk_threshold = 0.5) {
                     sprintf("Unmet share = %.1f%%; forecast ratio = %s", 100 * r$lost_share7, if (is.na(r$fc_ratio)) "n/a" else sprintf("%.2f", r$fc_ratio)),
                     "Low", "R6: no other rule fired")
   }
-  out <- dplyr::bind_rows(recs) |> dplyr::left_join(ind, by = "product_id", suffix = c("", ".ind"))
+  out <- tibble::as_tibble(acc) |> dplyr::left_join(ind, by = "product_id", suffix = c("", ".ind"))
   urg_w <- c(High = 3, Medium = 2, Low = 1, Info = 0.5)
   out$priority <- round(urg_w[out$urgency] * (1 + p$w_lost * out$lost_share7 + p$w_risk * tidyr::replace_na(out$risk, 0) +
                                                 p$w_anomaly * pmin(1, out$unexplained_drops7 + out$unexplained_surges7)), 3)
-  out <- out[order(-out$priority), ]
+  out <- out[order(-out$priority, seq_len(nrow(out))), ]
   out$if_ignored <- dplyr::case_when(
     out$action == "Consider replenishing earlier" ~ sprintf("At the recent rate, about %.0f%% of this product's demand may keep going unmet.", 100 * out$lost_share7),
     out$action == "Investigate unexplained sales drop" ~ "If the cause is a quality, price or display problem, it may persist unnoticed.",

@@ -273,3 +273,20 @@ a { color: var(--rp-forest2); }
   .rp-nav-store { padding: .4rem 0; }
   .rp-report-frame { height: 60vh; }
 }
+
+/* ---------- three-page layout additions ---------- */
+.rp-kpis-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .rp-kpis-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rp-filters-inline { box-shadow: none; border: 0; padding: 0 0 .5rem; background: transparent; }
+.rp-filters .shiny-options-group { display: flex; gap: .6rem; padding-top: .3rem; }
+.rp-filters .radio-inline, .rp-filters .form-check-inline { font-size: .86rem; margin-right: .4rem; }
+.rp-accordion { margin-bottom: 1rem; border-radius: 1rem; overflow: hidden; border: 1px solid var(--rp-line); box-shadow: var(--rp-shadow); background: #fff; }
+.rp-accordion .accordion-button { font-family: "Plus Jakarta Sans", Inter, sans-serif; font-weight: 700; color: var(--rp-forest); background: #fff; }
+.rp-accordion .accordion-button:not(.collapsed) { background: #F6FAF8; box-shadow: inset 0 -1px 0 var(--rp-line2); }
+.rp-accordion .accordion-button:focus { box-shadow: 0 0 0 .2rem rgba(217,164,65,.25); }
+.rp-mini-h { font-size: .84rem; font-weight: 700; color: var(--rp-forest); margin: .25rem 0 .4rem; }
+.rp-reading p { font-size: .9rem; line-height: 1.5; margin: 0 0 .6rem; color: var(--rp-ink2); }
+.rp-reading .rp-big { font-family: "Plus Jakarta Sans", Inter, sans-serif; font-size: 2rem; font-weight: 800; color: var(--rp-forest); letter-spacing: -.02em; margin-bottom: .4rem; line-height: 1.1; }
+.rp-reading .rp-big span { font-family: Inter, sans-serif; font-size: .9rem; font-weight: 500; color: var(--rp-ink2); letter-spacing: 0; }
+.rp-rules ol li, .rp-rules ul li { margin-bottom: .35rem; }
+.nav-underline .nav-link.active, .card-header .nav-link.active { color: var(--rp-forest) !important; border-bottom-color: var(--rp-gold) !important; font-weight: 650; }
