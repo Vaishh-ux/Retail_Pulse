@@ -199,12 +199,6 @@ manifest <- list(
 )
 w_json(manifest, "manifest")
 
-# One compact bundle for the web app, readable with base R (keeps `arrow` out of
-# the server process, which saves about 110 MB of memory on Render)
-bundle <- list()
-for (f in list.files(cfg$out_dir, pattern = "\\.parquet$", full.names = TRUE))
-  bundle[[sub("\\.parquet$", "", basename(f))]] <- tibble::as_tibble(arrow::read_parquet(f))
-for (n in c("manifest", "quality", "latent_validation"))
-  bundle[[paste0("json_", n)]] <- jsonlite::read_json(file.path(cfg$out_dir, paste0(n, ".json")), simplifyVector = TRUE)
-saveRDS(bundle, file.path(cfg$out_dir, "app_bundle.rds"), compress = "xz")
+# One compact bundle for the web app (see R/bundle.R)
+rp_write_bundle(cfg$out_dir)
 log_step("done in ", manifest$runtime_seconds, " s -> ", cfg$out_dir)

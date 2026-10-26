@@ -40,7 +40,7 @@ build_ui <- function(RP, sid) {
     htmltools::span(class = "rp-brand-mark", htmltools::tags$svg(width = 18, height = 18, viewBox = "0 0 24 24", `aria-hidden` = "true",
       htmltools::tags$path(d = "M2 13h4l3-8 4 14 3-6h6", fill = "none", stroke = "#D9A441", `stroke-width` = 2.4,
                            `stroke-linecap` = "round", `stroke-linejoin` = "round"))),
-    htmltools::span("RetailPulse", htmltools::tags$small("Demand & stock intelligence")))
+    htmltools::span("RetailPulse", htmltools::tags$small("Sales & demand for small shops")))
 
   bslib::page_navbar(
     id = "nav", title = brand, window_title = sprintf("RetailPulse · Store %s", m$store_id), theme = rp_theme(), fillable = FALSE,
@@ -53,13 +53,9 @@ build_ui <- function(RP, sid) {
       if (synthetic) htmltools::div(class = "rp-demo-banner", shiny::icon("triangle-exclamation"), htmltools::div(htmltools::strong("Demo mode: synthetic data. "),
         "Every number below comes from a generated dataset with the FreshRetailNet-50K schema, so the app can be tested. They are not findings about real stores. ",
         "Add the real Parquet files and re-run the pipeline to replace them."))),
-    bslib::nav_panel("Overview", value = "overview", icon = shiny::icon("gauge-high"),
-                     mod_overview_ui("ov", RP)),
-    bslib::nav_panel("Product", value = "product", icon = shiny::icon("magnifying-glass-chart"), mod_product_ui("pr", RP$product_choices)),
-    bslib::nav_panel("Monitoring", value = "monitor", icon = shiny::icon("clock-rotate-left"), mod_monitor_ui("mo", RP$product_choices)),
-    bslib::nav_panel("Forecast & Scenarios", value = "scenario", icon = shiny::icon("sliders"), mod_scenario_ui("sc", RP$product_choices)),
-    bslib::nav_panel("Data & Methods", value = "methods", icon = shiny::icon("flask"), mod_methods_ui("me", RP$product_choices)),
-    bslib::nav_panel("Report", value = "report", icon = shiny::icon("file-lines"), mod_report_ui("rep", RP, rep)),
+    bslib::nav_panel("Dashboard", value = "dashboard", icon = shiny::icon("gauge-high"), mod_dashboard_ui("db", RP)),
+    bslib::nav_panel("Product Demand", value = "product", icon = shiny::icon("magnifying-glass-chart"), mod_product_ui("pr", RP$product_choices)),
+    bslib::nav_panel("Data & Model Results", value = "results", icon = shiny::icon("flask"), mod_results_ui("rs", RP, rep)),
     bslib::nav_spacer(),
     bslib::nav_item(htmltools::div(class = "rp-nav-store",
       htmltools::span(class = paste("rp-data-pill", if (synthetic) "synthetic" else "real"), htmltools::span(class = "dot"),
@@ -152,10 +148,7 @@ warm_store <- function(RP) {
   invisible(calc_recs(RP, list(), z))
   d <- RP$daily; last <- max(d$dt); x <- d[d$dt > last - 28, ]
   pid <- RP$products$product_id[1]
-  for (w in list(ch_heatmap(x[x$product_id %in% utils::head(unique(x$product_id), 20), ], RP$label_of),
-                 ch_store_trend(RP$store_daily), ch_trend(d[d$product_id == pid, ], NULL, NULL),
-                 ch_weekday_hour(RP$weekday_hour[RP$weekday_hour$product_id == pid, ]),
-                 ch_model_bars(RP$forecast_cv_overall, RP$forecast_eval_overall)))
+  for (w in list(ch_store_trend(RP$store_daily), ch_trend(d[d$product_id == pid, ], NULL, NULL)))
     try(plotly::plotly_build(w), silent = TRUE)
   invisible(reactable::reactable(data.frame(a = 1)))
 }
@@ -185,28 +178,24 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   first <- RP$recommendations$product_id[1] %||% RP$products$product_id[1]
-  state <- shiny::reactiveValues(product = first, date = NULL, zthr = RP$manifest$thresholds$anomaly_z, horizon = 7)
+  # the anomaly threshold is fixed at the pipeline's value (3); its effect is shown, not adjustable
+  state <- shiny::reactiveValues(product = first, date = NULL, zthr = RP$manifest$thresholds$anomaly_z)
 
   anoms_r <- shiny::reactive(calc_anoms(RP, state$zthr))
-  build_recs <- function(params, zthr, growth = 1) calc_recs(RP, params, zthr, growth)
-  recs_r <- shiny::reactive(build_recs(list(), state$zthr))
+  recs_r <- shiny::reactive(calc_recs(RP, list(), state$zthr))
 
   goto_product <- function(pid, date = NULL) {
     state$product <- as.integer(pid)
     state$date <- if (!is.null(date)) as.Date(date) else NULL
     bslib::nav_select("nav", "product", session = session)
   }
-  goto_page <- function(page) bslib::nav_select("nav", page, session = session)
 
-  # Only the Overview starts immediately; every other page's server logic starts the
-  # first time that page is opened (less work per visit on small instances).
-  mod_overview_server("ov", RP, state, anoms_r, recs_r, goto_product, goto_page)
+  # Only the Dashboard starts immediately; the other two pages' server logic starts the
+  # first time each page is opened (less work per visit on small instances).
+  mod_dashboard_server("db", RP, state, recs_r, anoms_r, goto_product)
   starters <- list(
-    product  = function() mod_product_server("pr", RP, state, anoms_r, recs_r),
-    monitor  = function() mod_monitor_server("mo", RP, state, anoms_r, goto_product),
-    scenario = function() mod_scenario_server("sc", RP, state, build_recs),
-    methods  = function() mod_methods_server("me", RP, state),
-    report   = function() mod_report_server("rep", RP, state, recs_r, anoms_r))
+    product = function() mod_product_server("pr", RP, state, recs_r, anoms_r),
+    results = function() mod_results_server("rs", RP, state, recs_r, anoms_r, report_file(sid)))
   started <- character()
   shiny::observeEvent(input$nav, {
     pg <- input$nav
@@ -220,4 +209,13 @@ if (length(STORE_DIRS)) {
   message(sprintf("RetailPulse results precomputed in %.1f s", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
 }
 
-shiny::shinyApp(ui, server)
+# Pre-render the default store's page once the app has started (Shiny's resource paths
+# exist by then), so the first visitor and the host's port check get an instant reply.
+prerender <- function() {
+  if (!length(STORE_DIRS)) return(invisible())
+  t0 <- Sys.time()
+  try(invisible(cached_page(rp_get_store(STORE_DIRS, names(STORE_DIRS)[1]))), silent = TRUE)
+  message(sprintf("RetailPulse first page pre-rendered in %.1f s", as.numeric(difftime(Sys.time(), t0, units = "secs"))))
+}
+
+shiny::shinyApp(ui, server, onStart = prerender)

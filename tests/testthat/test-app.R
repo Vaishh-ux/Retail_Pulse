@@ -25,9 +25,7 @@ test_that("every chart builder handles empty input", {
                   ch_latent_scatter, ch_latent_cutoff, ch_calibration, ch_variability))
     expect_s3_class(fn(e), "plotly")
   expect_s3_class(ch_heatmap(e, c()), "plotly")
-  expect_s3_class(ch_top_products(e), "plotly")
   expect_s3_class(ch_categories(e), "plotly")
-  expect_s3_class(ch_replay(e, 10), "plotly")
 })
 
 test_that("chart builders render real outputs to valid widgets", {
@@ -47,14 +45,15 @@ test_that("chart builders render real outputs to valid widgets", {
   }
 })
 
-test_that("the Shiny app object builds and exposes the five pages", {
+test_that("the Shiny app object builds and exposes the three pages", {
   skip_if_not(has_outputs)
   old <- setwd(file.path(root, "app")); on.exit(setwd(old))
   Sys.setenv(RP_ROOT = root)
   app <- shiny::shinyAppDir(".")
   expect_s3_class(app, "shiny.appobj")
   ui_txt <- paste(readLines(file.path(root, "app", "app.R")), collapse = "\n")
-  for (p in c("overview", "product", "monitor", "scenario", "methods", "report")) expect_match(ui_txt, sprintf('value = "%s"', p))
+  for (p in c("dashboard", "product", "results")) expect_match(ui_txt, sprintf('value = "%s"', p))
+  for (gone in c("overview", "monitor", "scenario", "methods")) expect_no_match(ui_txt, sprintf("value = \"%s\"", gone))
 })
 
 test_that("Models-page charts build without size errors", {
@@ -92,4 +91,28 @@ test_that("scenario growth changes the forecast ratio used by the surge/decline 
   expect_equal(b$fc_ratio, a$fc_ratio * 1.5, tolerance = 1e-9)
   ra <- rp_recommend(a, risk_threshold = RP$manifest$risk_threshold); rb <- rp_recommend(b, risk_threshold = RP$manifest$risk_threshold)
   expect_gte(sum(rb$action == "Review possible demand surge"), sum(ra$action == "Review possible demand surge"))
+})
+
+test_that("app bundles are lean, gzip-compressed and complete for the three pages", {
+  skip_if_not(has_outputs)
+  for (d in rp_store_dirs(out_dir)) {
+    f <- file.path(d, "app_bundle.rds")
+    expect_true(file.exists(f))
+    expect_identical(readBin(f, "raw", 2), as.raw(c(0x1f, 0x8b)))           # gzip magic bytes
+    b <- readRDS(f)
+    expect_false(any(c("hourly", "replay") %in% names(b)))                     # large tables not loaded by the app
+    for (n in c("daily", "products", "forecast_next", "recommendations", "risk_metrics", "alerts", "weekday_hour", "sellout_curves"))
+      expect_true(n %in% names(b), info = n)
+    expect_lt(as.numeric(object.size(b)) / 1e6, 10)
+  }
+})
+
+test_that("faster rule engine gives exactly the pipeline's recommendations", {
+  skip_if_not(has_outputs)
+  RP <- rp_load_outputs(out_dir)
+  an <- rp_classify_anomalies(RP$daily, RP$manifest$thresholds$anomaly_z, stats::quantile(RP$daily$precpt, 0.9, na.rm = TRUE))
+  ind <- rp_product_indicators(RP$daily, RP$forecast_next, RP$manifest$chosen_model, an, RP$risk_next, RP$forecast_cv_product, RP$products)
+  r <- rp_recommend(ind, list(), RP$manifest$risk_threshold)
+  cols <- c("product_id", "action", "urgency", "reliability", "priority", "rule", "reason", "evidence")
+  expect_equal(as.data.frame(r[, cols]), as.data.frame(RP$recommendations[, cols]), ignore_attr = TRUE)
 })

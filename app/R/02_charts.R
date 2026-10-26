@@ -259,41 +259,7 @@ ch_variability <- function(v) {
     rp_plotly_layout(xtitle = "Mean estimated daily demand (normalised units)", ytitle = "Coefficient of variation", legend = FALSE, hovermode = "closest")
 }
 
-ch_replay <- function(g, upto) {
-  if (!NROW(g)) return(rp_empty_plot("No replay data for this product and day"))
-  seen <- g[g$hour <= upto, ]
-  outs <- g$hour[g$out == 1 & g$hour %in% 6:21 & g$hour <= upto]
-  shapes <- lapply(outs, function(h) list(type = "rect", x0 = h - 0.5, x1 = h + 0.5, yref = "paper", y0 = 0, y1 = 1,
-                                          fillcolor = RP_COL$stockout_lt, line = list(width = 0), layer = "below"))
-  shapes <- c(shapes, list(list(type = "line", x0 = upto + 0.5, x1 = upto + 0.5, yref = "paper", y0 = 0, y1 = 1,
-                                line = list(color = RP_COL$ink2, dash = "dot", width = 1))))
-  plotly::plot_ly(g, x = ~hour) |>
-    plotly::add_ribbons(ymin = ~cum_lo, ymax = ~cum_hi, name = "Expected range (80%)", fillcolor = RP_COL$band,
-                        line = list(width = 0), hoverinfo = "skip") |>
-    plotly::add_lines(y = ~cum_exp, name = "Expected (forecast × hourly profile)", line = list(color = RP_COL$accent, dash = "dash", width = 1.6)) |>
-    plotly::add_lines(data = seen, x = ~hour, y = ~cum_obs, name = "Observed so far (cumulative)",
-                      line = list(color = RP_COL$recorded, width = 2.6), marker = list(size = 5)) |>
-    rp_plotly_layout(ytitle = "Cumulative sales today", xtitle = "Hour of day") |>
-    plotly::layout(shapes = shapes, xaxis = list(range = c(0, 23.5), dtick = 3))
-}
 
-# Overview: top products by estimated demand in the period, split into recorded + unmet
-ch_top_products <- function(tp, source = "top") {
-  if (!NROW(tp)) return(rp_empty_plot("No products in this period"))
-  tp <- tp[order(tp$latent), ]
-  lab <- paste0("P", tp$product_id)
-  plotly::plot_ly(source = source, customdata = tp$product_id) |>
-    plotly::add_bars(y = lab, x = tp$observed, name = "Recorded sales", orientation = "h", marker = list(color = RP_COL$forest2),
-                     customdata = tp$product_id, hovertemplate = "%{y}: recorded %{x:.1f}<extra></extra>") |>
-    plotly::add_bars(y = lab, x = tp$latent - tp$observed, name = "Estimated unmet demand", orientation = "h",
-                     marker = list(color = RP_COL$stockout_lt, line = list(color = RP_COL$red, width = 1)),
-                     customdata = tp$product_id, text = sprintf("%.0f%% unmet", 100 * tp$unmet_share), textposition = "none",
-                     hovertemplate = "%{y}: unmet %{x:.1f} (%{text})<extra></extra>") |>
-    rp_plotly_layout(xtitle = "Normalised units in period", hovermode = "closest") |>
-    plotly::layout(barmode = "stack", yaxis = list(categoryorder = "array", categoryarray = lab, rangemode = NULL, title = ""),
-                   margin = list(l = 56, r = 12, t = 8, b = 40), legend = list(orientation = "h", x = 0, y = -0.18)) |>
-    plotly::event_register("plotly_click")
-}
 
 # Overview: category performance (recorded vs unmet) with stockout-hour rate in hover
 ch_categories <- function(cp, source = "cat") {
