@@ -17,12 +17,6 @@ store_from_query <- function(qs) {
   q <- shiny::parseQueryString(qs %||% "")
   q$store %||% names(STORE_DIRS)[1]
 }
-report_file <- function(sid) {
-  per_store <- file.path("reports", sprintf("report_%s.html", sid))
-  if (file.exists(file.path(WWW, per_store))) return(per_store)
-  if (identical(as.character(sid), names(STORE_DIRS)[1]) && file.exists(file.path(WWW, "report.html"))) return("report.html")
-  NULL
-}
 
 fatal_ui <- function(RP) bslib::page_fillable(theme = rp_theme(), htmltools::div(class = "rp-fatal",
   htmltools::h2("RetailPulse results not found"),
@@ -34,7 +28,6 @@ build_ui <- function(RP, sid) {
   m <- RP$manifest
   synthetic <- identical(m$mode, "synthetic")
   store_choices <- stats::setNames(names(STORE_DIRS), paste("Store", names(STORE_DIRS)))
-  rep <- report_file(sid)
 
   brand <- htmltools::div(class = "rp-brand",
     htmltools::span(class = "rp-brand-mark", htmltools::tags$svg(width = 18, height = 18, viewBox = "0 0 24 24", `aria-hidden` = "true",
@@ -55,7 +48,7 @@ build_ui <- function(RP, sid) {
         "Add the real Parquet files and re-run the pipeline to replace them."))),
     bslib::nav_panel("Dashboard", value = "dashboard", icon = shiny::icon("gauge-high"), mod_dashboard_ui("db", RP)),
     bslib::nav_panel("Product Demand", value = "product", icon = shiny::icon("magnifying-glass-chart"), mod_product_ui("pr", RP$product_choices)),
-    bslib::nav_panel("Data & Model Results", value = "results", icon = shiny::icon("flask"), mod_results_ui("rs", RP, rep)),
+    bslib::nav_panel("Data & Model Results", value = "results", icon = shiny::icon("flask"), mod_results_ui("rs", RP)),
     bslib::nav_spacer(),
     bslib::nav_item(htmltools::div(class = "rp-nav-store",
       htmltools::span(class = paste("rp-data-pill", if (synthetic) "synthetic" else "real"), htmltools::span(class = "dot"),
@@ -63,7 +56,7 @@ build_ui <- function(RP, sid) {
       if (length(store_choices) > 1) shiny::selectInput("store", "Store", choices = store_choices, selected = sid, width = "130px", selectize = FALSE)
       else htmltools::span(class = "rp-data-pill real", sprintf("Store %s", m$store_id)))),
     footer = htmltools::div(class = "rp-footer",
-      sprintf("RetailPulse · Store %s · %s to %s · Data: FreshRetailNet-50K (Dingdong-Inc, CC BY 4.0) · CSI3005 Advanced Data Visualization Techniques",
+      sprintf("RetailPulse · Store %s · %s to %s · Data: FreshRetailNet-50K",
               m$store_id, m$date_min, m$date_max),
       if (synthetic) " · currently showing SYNTHETIC demo data")
   )
@@ -195,7 +188,7 @@ server <- function(input, output, session) {
   mod_dashboard_server("db", RP, state, recs_r, anoms_r, goto_product)
   starters <- list(
     product = function() mod_product_server("pr", RP, state, recs_r, anoms_r),
-    results = function() mod_results_server("rs", RP, state, recs_r, anoms_r, report_file(sid)))
+    results = function() mod_results_server("rs", RP, state, recs_r, anoms_r))
   started <- character()
   shiny::observeEvent(input$nav, {
     pg <- input$nav
