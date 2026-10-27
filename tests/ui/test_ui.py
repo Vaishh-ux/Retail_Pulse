@@ -50,9 +50,9 @@ def kpi(pg, i):
     return pg.locator("#db-kpis .rp-kpi-value").nth(i).inner_text()
 
 
-def test_three_pages_only(page):
+def test_main_pages(page):
     vals = page.evaluate("Array.from(document.querySelectorAll('.navbar a.nav-link[data-value]')).map(a => a.dataset.value)")
-    assert vals == ["dashboard", "product", "results"]
+    assert vals == ["dashboard", "product", "results", "inventory"]
     expect(page.locator(".rp-data-pill").first).to_contain_text(re.compile("Real data|Synthetic demo"))
 
 

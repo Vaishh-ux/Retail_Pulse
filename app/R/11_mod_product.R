@@ -16,6 +16,7 @@ mod_product_ui <- function(id, choices) {
                            choices = c("Last 4 weeks" = "28", "Last 8 weeks" = "56", "All data" = "all")),
         shiny::radioButtons(ns("horizon"), "Forecast", choices = c("7 days" = "7", "14 days" = "14"), selected = "7", inline = TRUE))),
     shiny::uiOutput(ns("header")),
+    shiny::uiOutput(ns("linked")),
     bslib::layout_columns(col_widths = bslib::breakpoints(sm = 12, lg = c(8, 4)),
       bslib::card(full_screen = TRUE,
         bslib::card_header(rp_card_title("Sales, estimated demand and forecast", "gold shading = promotion · red bars = hours out of stock · dashed = forecast", "chart-line")),
@@ -35,7 +36,7 @@ mod_product_ui <- function(id, choices) {
   )
 }
 
-mod_product_server <- function(id, RP, state, recs_r, anoms_r) {
+mod_product_server <- function(id, RP, state, recs_r, anoms_r, catalogue = shiny::reactive(NULL), goto_simulator = function(sku) NULL) {
   shiny::moduleServer(id, function(input, output, session) {
     ns <- session$ns
     last_dt <- max(RP$daily$dt)
@@ -77,6 +78,18 @@ mod_product_server <- function(id, RP, state, recs_r, anoms_r) {
           rp_kpi("Chance of a stockout tomorrow", fmt_pct(risk), "from past sell-out patterns, not current stock",
                  "triangle-exclamation", if (is.na(risk)) "neutral" else if (risk >= RP$manifest$risk_threshold) "critical" else "good")))
     }) |> shiny::bindCache(sid, pid(), input$window %||% "56", "header")
+
+    # not cached: depends on this visitor's own catalogue
+    output$linked <- shiny::renderUI({
+      x <- catalogue(); if (is.null(x) || !nrow(x)) return(NULL)
+      x <- x[!is.na(x$linked_product_id) & x$linked_product_id == pid(), , drop = FALSE]; if (!nrow(x)) return(NULL)
+      htmltools::div(class = "rp-info-banner rp-linked", shiny::icon("boxes-stacked"), htmltools::div(
+        htmltools::strong("Linked in your catalogue: "),
+        lapply(seq_len(nrow(x)), function(i) htmltools::span(class = "rp-linked-item", sprintf("%s (%s) · %s in stock", x$name[i], x$sku[i], fmt_num(x$stock[i], 0)),
+          htmltools::tags$button(type = "button", class = "btn btn-outline-secondary btn-xs", `data-rp-input` = ns("simulate"), `data-rp-value` = x$sku[i], "Simulate"))),
+        htmltools::span(class = "rp-sub", " Your own store data; the charts below are historical research data in normalised units.")))
+    })
+    shiny::observeEvent(input$simulate, goto_simulator(input$simulate$value))
 
     output$trend <- plotly::renderPlotly({
       x <- dp(); if (!nrow(x)) return(rp_empty_plot("No days to show"))

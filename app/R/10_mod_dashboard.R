@@ -34,7 +34,7 @@ mod_dashboard_ui <- function(id, RP) {
       bslib::card(
         bslib::card_header(rp_card_title("What this means", "for the selected period", "lightbulb")),
         shiny::uiOutput(ns("summary")))),
-    bslib::card(
+    bslib::card(id = ns("attention_card"),
       bslib::card_header(rp_card_title("Products that need attention", "as of the latest day · click a row to see the product", "bell")),
       htmltools::div(class = "rp-filters rp-filters-inline",
         shiny::selectInput(ns("action"), NULL, width = "300px",
@@ -45,7 +45,7 @@ mod_dashboard_ui <- function(id, RP) {
   )
 }
 
-mod_dashboard_server <- function(id, RP, state, recs_r, anoms_r, goto_product) {
+mod_dashboard_server <- function(id, RP, state, recs_r, anoms_r, goto_product, goto_results = function(tab) NULL) {
   shiny::moduleServer(id, function(input, output, session) {
     ns <- session$ns
     rng <- range(RP$daily$dt); last_dt <- rng[2]
@@ -76,15 +76,18 @@ mod_dashboard_server <- function(id, RP, state, recs_r, anoms_r, goto_product) {
       attn <- length(unique(r$product_id[r$urgency %in% c("High", "Medium")]))
       high <- length(unique(r$product_id[r$urgency == "High"]))
       d1 <- chg(rec, rec_p); d2 <- chg(dem, dem_p); d3 <- chg(unmet, unmet_p)
+      # each card opens the analysis behind it
+      click <- function(tag, target, tip) htmltools::tagAppendAttributes(tag, class = "rp-kpi-click", role = "button", tabindex = "0",
+                                                                         `data-rp-input` = ns("kpi"), `data-rp-value` = target, title = tip)
       htmltools::div(class = "rp-kpis rp-kpis-4",
-        rp_kpi("Recorded sales", fmt_num(rec, 0), sprintf("%s · normalised units (the dataset hides real quantities)", lab()),
-               "cart-shopping", "neutral", d1, if (is.na(d1)) NA else d1 >= 0),
-        rp_kpi("Estimated demand", fmt_num(dem, 0), "What customers probably wanted, including sales missed while out of stock (an estimate)",
-               "chart-column", "neutral", d2, if (is.na(d2)) NA else d2 >= 0),
-        rp_kpi("Demand missed", fmt_pct(unmet, 1), sprintf("about %s units lost to empty shelves", fmt_num(sum(x$lost), 0)),
-               "box-open", tone_for(unmet, 0.05, 0.15), d3, if (is.na(d3)) NA else d3 <= 0),
-        rp_kpi("Products needing attention", attn, sprintf("%d urgent · based on the last 7 days of data", high),
-               "triangle-exclamation", if (high > 0) "warning" else "good"))
+        click(rp_kpi("Recorded sales", fmt_num(rec, 0), sprintf("%s · normalised units (the dataset hides real quantities)", lab()),
+               "cart-shopping", "neutral", d1, if (is.na(d1)) NA else d1 >= 0), "eda", "Open: Exploring the data"),
+        click(rp_kpi("Estimated demand", fmt_num(dem, 0), "What customers probably wanted, including sales missed while out of stock (an estimate)",
+               "chart-column", "neutral", d2, if (is.na(d2)) NA else d2 >= 0), "fc", "Open: how demand is estimated and forecast"),
+        click(rp_kpi("Demand missed", fmt_pct(unmet, 1), sprintf("about %s units lost to empty shelves", fmt_num(sum(x$lost), 0)),
+               "box-open", tone_for(unmet, 0.05, 0.15), d3, if (is.na(d3)) NA else d3 <= 0), "risk", "Open: stockout risk"),
+        click(rp_kpi("Products needing attention", attn, sprintf("%d urgent · based on the last 7 days of data", high),
+               "triangle-exclamation", if (high > 0) "warning" else "good"), "attention", "Jump to the list of products"))
     }) |> shiny::bindCache(key(), "kpis")
 
     agg <- shiny::reactive({
@@ -147,5 +150,10 @@ mod_dashboard_server <- function(id, RP, state, recs_r, anoms_r, goto_product) {
                        Urgency = reactable::colDef(width = 96, cell = function(v) rp_badge(v, urgency_kind(v)))))
     }) |> shiny::bindCache(sid, input$cat %||% "", input$action %||% "", "attention")
     shiny::observeEvent(input$pick, goto_product(input$pick))
+    shiny::observeEvent(input$kpi, {
+      t <- input$kpi$value
+      if (t == "attention") { shiny::updateSelectInput(session, "action", selected = ""); session$sendCustomMessage("rp-scroll", list(id = ns("attention_card"))) }
+      else goto_results(t)
+    })
   })
 }
