@@ -1,17 +1,17 @@
 # Page 3 - Data & Model Results ----------------------------------------------------------------
 # Evidence for the assessment: data preparation, exploration, forecasting method and
-# evaluation, stockout-risk evaluation, the R Markdown report and CSV downloads.
+# evaluation, stockout-risk evaluation and CSV downloads of the analytical results.
 # Detailed technical charts sit under "Advanced details". Shiny only renders outputs on the
 # tab that is open, so the heavier charts cost nothing until someone opens their tab.
 
-mod_results_ui <- function(id, RP, report_path = NULL) {
+mod_results_ui <- function(id, RP) {
   ns <- shiny::NS(id)
   card <- function(title, sub, ...) bslib::card(full_screen = TRUE, bslib::card_header(rp_card_title(title, sub)), ...)
   two <- function(...) bslib::layout_columns(col_widths = bslib::breakpoints(sm = 12, lg = c(6, 6)), ...)
   htmltools::tagList(
     htmltools::div(class = "rp-hero", htmltools::div(htmltools::div(class = "rp-eyebrow", "Data & model results"),
       htmltools::h1("How the numbers were produced"),
-      htmltools::p("Cleaning, exploration, the forecasting method and how well it worked, the stockout-risk model, and the full report."))),
+      htmltools::p("Cleaning, exploration, the forecasting method and how well it worked, the stockout-risk model, and the results as CSV files."))),
     bslib::navset_card_underline(id = ns("tab"),
       bslib::nav_panel("Data preparation", value = "prep",
         shiny::uiOutput(ns("dq_kpis")),
@@ -43,7 +43,7 @@ mod_results_ui <- function(id, RP, report_path = NULL) {
         two(card("How well does the model predict tomorrow's stockouts?", NULL, reactable::reactableOutput(ns("risk_tbl")), shiny::uiOutput(ns("risk_note"))),
             card("Right and wrong predictions (held-out week)", NULL, shiny::uiOutput(ns("confusion")))),
         card("What raises the chance of a stockout?", "Odds ratio > 1 = higher chance; lines are 95% confidence intervals", plotly::plotlyOutput(ns("coefs"), height = "280px"))),
-      bslib::nav_panel("Report & downloads", value = "report", shiny::uiOutput(ns("report"))),
+      bslib::nav_panel("CSV Downloads", value = "downloads", shiny::uiOutput(ns("downloads"))),
       bslib::nav_panel("Advanced details", value = "adv",
         htmltools::p(class = "rp-sub", "Technical material for the assessment. These charts need some statistics background."),
         bslib::accordion(id = ns("adv"), open = "heat", multiple = TRUE, class = "rp-accordion",
@@ -59,7 +59,7 @@ mod_results_ui <- function(id, RP, report_path = NULL) {
   )
 }
 
-mod_results_server <- function(id, RP, state, recs_r, anoms_r, report_path = NULL) {
+mod_results_server <- function(id, RP, state, recs_r, anoms_r) {
   shiny::moduleServer(id, function(input, output, session) {
     q <- RP$quality; m <- RP$manifest; sid <- m$store_id
     rt <- function(df, ...) reactable::reactable(df, compact = TRUE, sortable = FALSE, ...)
@@ -204,37 +204,23 @@ mod_results_server <- function(id, RP, state, recs_r, anoms_r, report_path = NUL
     }) |> shiny::bindCache(sid, "confusion")
     output$coefs <- plotly::renderPlotly(ch_coefs(RP$risk_coefficients)) |> shiny::bindCache(sid, "coefs")
 
-    # ---- report & downloads ----
-    output$report <- shiny::renderUI({
-      sec <- function(icon, title, text) htmltools::div(class = "rp-report-sec", shiny::icon(icon), htmltools::div(htmltools::strong(title), htmltools::span(text)))
-      bslib::layout_columns(col_widths = bslib::breakpoints(sm = 12, lg = c(7, 5)),
-        bslib::card(bslib::card_header(rp_card_title("The full report", "R Markdown · ggplot2 figures · R code included", "book-open")),
-          htmltools::div(class = "rp-report-grid",
-            sec("database", "Data and cleaning", "Source, licence, coverage and every quality check"),
-            sec("lightbulb", "Key insights", "Missed demand, timing, weekly patterns"),
-            sec("triangle-exclamation", "Products at risk", "Tomorrow's stockout chance by product"),
-            sec("chart-line", "Forecast results", "ETS vs baseline, cross-validation and held-out week"),
-            sec("list-check", "Suggestions", "Rule-based actions with evidence"),
-            sec("circle-info", "Limitations", "What the data cannot tell us"))),
-        bslib::card(bslib::card_header(rp_card_title("Download", sprintf("store %s", sid), "download")),
-          if (!is.null(report_path)) htmltools::div(class = "rp-dl-row",
-            htmltools::a(href = report_path, target = "_blank", class = "btn btn-primary btn-sm", shiny::icon("up-right-from-square"), " Open the report"),
-            shiny::downloadButton(session$ns("dl_report"), "Download report (HTML)", class = "btn-gold btn-sm"))
-          else htmltools::div(class = "rp-warn", "The report has not been built for this store yet (run scripts/knit_reports.R). The tables below can still be downloaded."),
-          htmltools::p(class = "rp-sub", "For a PDF, open the report and use your browser's Print → Save as PDF."),
-          htmltools::h6(class = "rp-side-h", "Result tables (CSV)"),
-          htmltools::div(class = "rp-dl-row",
-            shiny::downloadButton(session$ns("dl_recs"), "Suggested actions", class = "btn-outline-secondary btn-sm"),
-            shiny::downloadButton(session$ns("dl_risk"), "Product risk table", class = "btn-outline-secondary btn-sm"),
-            shiny::downloadButton(session$ns("dl_metrics"), "Model evaluation", class = "btn-outline-secondary btn-sm"),
-            shiny::downloadButton(session$ns("dl_anoms"), "Unusual days", class = "btn-outline-secondary btn-sm"),
-            shiny::downloadButton(session$ns("dl_alerts"), "Replay alerts", class = "btn-outline-secondary btn-sm"))))
-    }) |> shiny::bindCache(sid, "report")
-    www <- file.path(rp_app_root(), "app", "www")
+    # ---- CSV downloads ----
+    output$downloads <- shiny::renderUI({
+      item <- function(id, label, text) htmltools::div(class = "rp-csv-item",
+        htmltools::div(class = "rp-csv-text", htmltools::strong(label), htmltools::span(text)),
+        shiny::downloadButton(session$ns(id), "Download CSV", class = "btn-outline-secondary btn-sm"))
+      bslib::card(
+        bslib::card_header(rp_card_title("Download analytical results", sprintf("Store %s · %s to %s", sid, m$date_min, m$date_max), "download")),
+        htmltools::p(class = "rp-csv-intro", "These CSV files contain the project's analytical outputs for this store, as shown in the app. They open in Excel, Google Sheets or R. Sales are in normalised units, as in the source data."),
+        htmltools::div(class = "rp-csv-grid",
+          item("dl_recs", "Suggested actions", "Every rule-based suggestion with its reason, evidence, urgency and priority."),
+          item("dl_risk", "Product risk table", "Each product's chance of a stockout tomorrow, missed demand and top suggestion."),
+          item("dl_metrics", "Model evaluation", "Forecast, stockout-risk and demand-estimate accuracy scores."),
+          item("dl_anoms", "Unusual days", "Days with unusually high or low sales and their likely cause."),
+          item("dl_alerts", "Replay alerts", "Alerts from the hour-by-hour historical replay of the evaluation week.")))
+    }) |> shiny::bindCache(sid, "downloads")
     fname <- function(x, ext = "csv") sprintf("retailpulse_store%s_%s.%s", sid, x, ext)
     w_csv <- function(df, file) utils::write.csv(df, file, row.names = FALSE, na = "")
-    output$dl_report <- shiny::downloadHandler(filename = function() fname("report", "html"), content = function(file) {
-      src <- file.path(www, "reports", sprintf("report_%s.html", sid)); if (!file.exists(src)) src <- file.path(www, "report.html"); file.copy(src, file) })
     output$dl_recs <- shiny::downloadHandler(filename = function() fname("suggested_actions"), content = function(file) {
       r <- recs_r(); w_csv(data.frame(product = plabel(r$product_id), action = r$action, urgency = r$urgency, reliability = r$reliability, priority = r$priority,
                                       reason = r$reason, evidence = r$evidence, if_ignored = r$if_ignored, rule = r$rule), file) })

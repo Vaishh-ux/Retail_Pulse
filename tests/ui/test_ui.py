@@ -126,7 +126,7 @@ def test_more_about_product_renders_on_open(page):
 def test_results_tabs_render(page):
     nav(page, "results")
     for tab, sel_ in [("prep", "#rs-dims .rt-table"), ("eda", "#rs-store_wdh .plot-container"), ("fc", "#rs-fc_tbl .rt-table"),
-                      ("risk", "#rs-confusion .rp-cm"), ("report", "#rs-report .rp-report-grid"), ("adv", "#rs-heat .plot-container")]:
+                      ("risk", "#rs-confusion .rp-cm"), ("downloads", "#rs-downloads .rp-csv-grid"), ("adv", "#rs-heat .plot-container")]:
         page.evaluate(f"document.querySelector(\"a[data-value='{tab}']\").click()")
         page.wait_for_selector(sel_, timeout=30000)
         assert errors_shown(page) == 0, tab
@@ -139,16 +139,17 @@ def test_advanced_details_panels(page):
     expect(page.locator("#rs-replay")).to_contain_text("not a live feed")
 
 
-def test_report_and_downloads(page):
-    page.evaluate("document.querySelector(\"a[data-value='report']\").click()")
-    page.wait_for_timeout(1500)
-    link = page.locator("#rs-report a:has-text('Open the report')")
-    if link.count():
-        r = page.request.get(URL.rstrip("/") + "/" + link.get_attribute("href"))
-        assert r.status == 200 and "RetailPulse" in r.text()
-        with page.expect_download() as d:
-            page.locator("#rs-dl_report").click()
-        assert d.value.suggested_filename.endswith(".html")
+def test_csv_downloads(page):
+    tab = page.locator("a[data-value='downloads']")
+    expect(tab).to_have_text("CSV Downloads")
+    page.evaluate("document.querySelector(\"a[data-value='downloads']\").click()")
+    page.wait_for_selector("#rs-downloads .rp-csv-grid", timeout=20000)
+    body = page.locator("#rs-downloads")
+    expect(body).to_contain_text("Download analytical results")
+    for gone in ["Open the report", "Download report (HTML)", "Save as PDF"]:
+        expect(body).not_to_contain_text(gone)
+    assert page.locator("#rs-dl_report").count() == 0
+    assert page.locator("#rs-downloads .shiny-download-link").count() == 5
     for btn, name in [("#rs-dl_recs", "suggested_actions"), ("#rs-dl_risk", "product_risk"), ("#rs-dl_metrics", "model_evaluation"),
                       ("#rs-dl_anoms", "unusual_days"), ("#rs-dl_alerts", "replay_alerts")]:
         with page.expect_download() as d:
